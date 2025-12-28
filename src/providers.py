@@ -464,10 +464,6 @@ class ProviderManager:
     
     def _initialize_providers(self):
         """Initialize available providers based on API keys"""
-        # Always add free provider
-        self.providers[ProviderType.FREE] = FreeProvider()
-        logger.info("Initialized free provider")
-        
         # API key configurations: (env_var, provider_type, provider_class, validation_pattern)
         api_configs = [
             ("OPENAI_KEY", ProviderType.OPENAI, OpenAIProvider, r'^sk-[a-zA-Z0-9]{20,}$'),  # More flexible OpenAI key format
