@@ -1,61 +1,138 @@
-import pytest
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-import os
 
-# Note: Discord client tests are removed because they require full Discord environment
-# These tests are not suitable for unit testing and should be tested manually
-# or with integration tests in a real Discord environment.
+import pytest
+from src.aclient import DiscordClient
+from src.config import BotConfig
+from src.providers import ProviderType
 
-class TestDiscordClientLogic:
-    """Test only the business logic parts that don't require Discord initialization"""
-    
-    def test_provider_logic(self):
-        """Test provider management logic without Discord"""
-        from src.providers import ProviderManager, ProviderType
-        
-        # Test provider manager creation
-        manager = ProviderManager()
-        assert ProviderType.FREE in manager.get_available_providers()
-        
-        # Test provider switching logic
-        manager.set_current_provider(ProviderType.FREE)
-        assert manager.current_provider == ProviderType.FREE
-    
-    def test_conversation_history_management(self):
-        """Test conversation history logic"""
-        # Test conversation history trimming logic
-        MAX_LENGTH = 20
-        TRIM_SIZE = 8
-        
-        # Simulate conversation history
-        history = []
-        for i in range(25):  # More than max length
-            history.append({"role": "user", "content": f"message {i}"})
-        
-        # Simulate trimming logic
-        if len(history) > MAX_LENGTH:
-            # Keep system messages and recent context
-            system_messages = [m for m in history[:3] if m.get("role") == "system"]
-            recent_messages = history[-TRIM_SIZE:]
-            
-            if system_messages:
-                trimmed_history = system_messages + recent_messages
-            else:
-                trimmed_history = recent_messages
-        
-        assert len(trimmed_history) <= MAX_LENGTH
-        assert len(trimmed_history) == TRIM_SIZE  # No system messages in this test
-    
-    def test_persona_management(self):
-        """Test persona switching logic"""
-        from src.personas import get_available_personas, is_jailbreak_persona
-        
-        # Test getting available personas
-        personas = get_available_personas()
-        assert "standard" in personas
-        assert "creative" in personas
-        
-        # Test jailbreak detection
-        assert is_jailbreak_persona("jailbreak-v1") is True
-        assert is_jailbreak_persona("standard") is False
+
+class FakeProvider:
+    def __init__(self, answer="ok"):
+        self.answer = answer
+        self.calls = []
+        self.event = None
+
+    async def chat_completion(self, messages, model=None, **kwargs):
+        self.calls.append((messages, model, kwargs))
+        if self.event:
+            await self.event.wait()
+        return self.answer
+
+    def supports_image_generation(self):
+        return False
+
+
+class FakeManager:
+    def __init__(self):
+        self.provider = FakeProvider()
+
+    def get_provider(self, provider_type=None):
+        return self.provider
+
+
+def make_client(**overrides):
+    values = dict(discord_bot_token="token", cooldown_seconds=0)
+    values.update(overrides)
+    return DiscordClient(BotConfig(**values), FakeManager())
+
+
+@pytest.mark.asyncio
+async def test_private_and_public_history_are_isolated():
+    client = make_client()
+    scope = (8, 9, 10)
+    await client.respond(scope, "public", private=False)
+    await client.respond(scope, "secret", private=True)
+    assert len(client.conversations) == 2
+    public = next(c for k, c in client.conversations.items() if not k.private)
+    private = next(c for k, c in client.conversations.items() if k.private)
+    assert "secret" not in str(public.messages)
+    assert "public" not in str(private.messages)
+
+
+@pytest.mark.asyncio
+async def test_session_count_trim_and_idle_eviction_are_bounded():
+    client = make_client(
+        max_sessions=2, history_messages=2, history_chars=50, idle_ttl_seconds=3600
+    )
+    scope = (1, 2, 1)
+    await client.respond(scope, "question", private=False)
+    await client.respond(scope, "private question", private=True)
+    client.get_settings((1, 2, 2))
+    with pytest.raises(RuntimeError, match="session limit"):
+        client.get_settings((1, 2, 3))
+    assert len(client.conversations) == 2
+    conv = next(iter(client.conversations.values()))
+    assert len(conv.messages) <= 2
+    client._prune(now=10**10)
+    assert not client.conversations
+
+
+@pytest.mark.asyncio
+async def test_capacity_fails_fast_and_settings_cannot_change_mid_request():
+    manager = FakeManager()
+    manager.provider.event = asyncio.Event()
+    client = DiscordClient(
+        BotConfig(discord_bot_token="x", cooldown_seconds=0, max_concurrent_requests=1), manager
+    )
+    scope = (1, 2, 3)
+    task = asyncio.create_task(client.respond(scope, "hello", private=False))
+    await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="busy|already"):
+        await client.respond((1, 2, 4), "too many", private=False)
+    with pytest.raises(RuntimeError, match="in progress"):
+        client.reset(scope)
+    manager.provider.event.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_settings_are_per_user_channel_and_provider_snapshot_is_used():
+    manager = FakeManager()
+    manager.provider.event = asyncio.Event()
+    client = DiscordClient(BotConfig(discord_bot_token="token", cooldown_seconds=0), manager)
+    a = client.get_settings((1, 2, 3))
+    b = client.get_settings((1, 2, 4))
+    a.persona = "creative"
+    assert b.persona == "standard"
+    assert b.private is True
+    assert a.provider == ProviderType.GEMINI
+    a.model = "chosen-model"
+    snapshot = (a.provider, a.model, a.persona)
+    task = asyncio.create_task(
+        client.respond((1, 2, 3), "hello", private=False, settings_snapshot=snapshot)
+    )
+    await asyncio.sleep(0)
+    a.model, a.persona = "later-model", "technical"
+    manager.provider.event.set()
+    await task
+    messages, model, _ = manager.provider.calls[-1]
+    assert model == "chosen-model"
+    assert "enhanced creative capabilities" in messages[0]["content"]
+
+
+def test_expired_scope_restores_private_default():
+    client = make_client(idle_ttl_seconds=1)
+    scope = (1, 2, 3)
+    settings = client.get_settings(scope)
+    settings.private = False
+    client._prune(now=settings.last_used + 2)
+    assert client.get_settings(scope).private is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_provider_call_releases_capacity_and_reset_is_scoped():
+    manager = FakeManager()
+    client = DiscordClient(BotConfig(discord_bot_token="x", cooldown_seconds=0), manager)
+    first = (1, 2, 3)
+    other = (1, 2, 4)
+    await client.respond(other, "keep this", private=False)
+    manager.provider.event = asyncio.Event()
+    task = asyncio.create_task(client.respond(first, "cancel me", private=False))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not client._capacity.locked()
+    assert not next(c for k, c in client.conversations.items() if k.user_id == 3).in_flight
+    client.reset(first)
+    assert any(k.user_id == 4 for k in client.conversations)

@@ -1,8 +1,6 @@
-version: "3.8"
-
 services:
   chatgpt-discord-bot:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     image: chatgpt-discord-bot:latest
@@ -10,20 +8,13 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
-      - /app/.cache
-    networks:
-      - bot-network
+    security_opt:
+      - no-new-privileges:true
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
-        max-size: "10m"
+        max-size: 10m
         max-file: "3"
-
-networks:
-  bot-network:
-    driver: bridge
