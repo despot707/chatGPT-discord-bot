@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from src.config import BotConfig
 
 KEY_NAMES = {
@@ -20,6 +20,39 @@ KEY_NAMES = {
     "groq": ("GROQ_API_KEY",),
     "openrouter": ("OPENROUTER_API_KEY",),
 }
+
+BOT_ENV_PREFIXES = (
+    "OPENAI_",
+    "GEMINI_",
+    "CLAUDE_",
+    "ANTHROPIC_",
+    "XAI_",
+    "GROK_",
+    "GROQ_",
+    "OPENROUTER_",
+    "OLLAMA_",
+    "TAVILY_",
+)
+BOT_ENV_ALIASES = {
+    "ADMIN_USER_IDS",
+    "ENABLE_PROVIDER_FALLBACK",
+    "FALLBACK_PROVIDERS",
+    "MAX_PROVIDER_ATTEMPTS",
+    "PROVIDER_ATTEMPT_TIMEOUT_SECONDS",
+    "PROVIDER_COOLDOWN_SECONDS",
+}
+BOT_ENV_NAMES = {field.name.upper() for field in fields(BotConfig)} | BOT_ENV_ALIASES
+
+
+def load_explicit_environment(env_path: Path) -> None:
+    """Use the selected file as the sole source for bot settings and credentials."""
+    values = dotenv_values(env_path, interpolate=False)
+    for key in tuple(os.environ):
+        if key.upper() in BOT_ENV_NAMES or key.upper().startswith(BOT_ENV_PREFIXES):
+            os.environ.pop(key, None)
+    for key, value in values.items():
+        if value is not None:
+            os.environ[key] = value
 
 
 def validate_environment(environ=None) -> BotConfig:
@@ -49,12 +82,23 @@ def validate_environment(environ=None) -> BotConfig:
 
 
 def main(argv=None) -> int:
-    load_dotenv()
     parser = argparse.ArgumentParser(description="ChatGPT Discord bot")
+    parser.add_argument(
+        "--env-file", metavar="PATH", help="load configuration from this exact environment file"
+    )
     parser.add_argument(
         "--check-config", action="store_true", help="validate configuration without connecting"
     )
     args = parser.parse_args(argv)
+    if args.env_file:
+        env_path = Path(args.env_file)
+        if not env_path.is_file():
+            print("Configuration error: specified env file does not exist or is not a file")
+            return 2
+        # dotenv_values also works when PYTHON_DOTENV_DISABLED is set.
+        load_explicit_environment(env_path)
+    else:
+        load_dotenv()
     try:
         config = validate_environment()
     except ValueError as exc:

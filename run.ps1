@@ -14,9 +14,9 @@ if (-not (Test-Path -LiteralPath $python)) {
 Push-Location $PSScriptRoot
 try {
     if ($CheckConfig) {
-        & $python (Join-Path $PSScriptRoot 'main.py') --check-config
+        & $python (Join-Path $PSScriptRoot 'main.py') --env-file (Join-Path $PSScriptRoot '.env') --check-config
     } else {
-        & $python (Join-Path $PSScriptRoot 'main.py')
+        & $python (Join-Path $PSScriptRoot 'main.py') --env-file (Join-Path $PSScriptRoot '.env')
     }
     $botExitCode = $LASTEXITCODE
 } finally {

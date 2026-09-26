@@ -48,6 +48,8 @@ Put your Discord token and provider keys in `.env`, which is ignored by Git. Che
 
 Keep that PowerShell window open while hosting on your PC. `run.ps1` uses the repository's `.venv` and returns the bot process exit code. The check validates local settings only; it does not contact Discord or verify that credentials, quotas, or models work.
 
+`run.ps1` loads bot settings from the local `.env` file. The explicit `--env-file` option ignores inherited bot settings and credentials that are absent from that file, and treats `${NAME}` literally rather than expanding it from the process environment. Running `main.py` without that option keeps the usual environment-based behavior for cloud hosting.
+
 ## Run on Railway
 
 The repository includes a Dockerfile and Railway configuration for one always-on worker process. To host it, connect this repository as a Railway service and deploy from the repository root. Add `DISCORD_BOT_TOKEN` and the provider keys as Railway service variables; add other settings from `.env.example` as needed. Do not put secret values in Git, README files, or a committed `.env`.
@@ -68,7 +70,7 @@ Set `DEFAULT_PROVIDER` and optionally `DEFAULT_MODEL`; `/provider` can also chan
 | Groq | `GROQ_API_KEY`, optional `GROQ_MODEL` | Default candidate: `openai/gpt-oss-20b`. |
 | OpenRouter | `OPENROUTER_API_KEY`, optional `OPENROUTER_MODEL` | Default candidate: `openrouter/free`; the free router may select changing models. |
 | Ollama | `OLLAMA_MODEL`, optional `OLLAMA_BASE_URL` | Local OpenAI-compatible endpoint; install and start the model yourself. Image input requires `OLLAMA_SUPPORTS_VISION=true` and a vision-capable model. |
-| OpenAI | `OPENAI_API_KEY`, optional `OPENAI_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`; API billing is separate from ChatGPT plans. |
+| OpenAI | `OPENAI_API_KEY`, optional `OPENAI_MODEL`, `OPENAI_REASONING_EFFORT` | Defaults to `gpt-6-luna`; set reasoning effort to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Leave it empty to use the selected model's default; `none` is recommended for budget chat with GPT-6 Luna. Disabled unless `ALLOW_PAID_PROVIDERS=true`; API billing is separate from ChatGPT plans. |
 | Anthropic | `ANTHROPIC_API_KEY`, optional `CLAUDE_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
 | xAI | `XAI_API_KEY`, optional `GROK_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
 

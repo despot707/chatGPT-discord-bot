@@ -52,3 +52,18 @@ def test_discord_context_and_web_limits_are_bounded():
         BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "AUTOMATIC_CONTEXT_COUNT": "21"})
     with pytest.raises(ValueError, match="WEB_MAX_BYTES"):
         BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "WEB_MAX_BYTES": "2000001"})
+
+
+def test_openai_reasoning_effort_is_optional_and_validated_without_echoing_value():
+    assert BotConfig.from_env({"DISCORD_BOT_TOKEN": "test"}).openai_reasoning_effort is None
+    assert (
+        BotConfig.from_env(
+            {"DISCORD_BOT_TOKEN": "test", "OPENAI_REASONING_EFFORT": "low"}
+        ).openai_reasoning_effort
+        == "low"
+    )
+    invalid_value = "private-invalid-value"
+    with pytest.raises(ValueError) as caught:
+        BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "OPENAI_REASONING_EFFORT": invalid_value})
+    assert "OPENAI_REASONING_EFFORT" in str(caught.value)
+    assert invalid_value not in str(caught.value)

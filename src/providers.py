@@ -17,6 +17,8 @@ from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
 
+from src.config import _openai_reasoning_effort
+
 logger = logging.getLogger(__name__)
 
 
@@ -301,13 +303,17 @@ class OpenAIProvider(BaseProvider):
         self,
         api_key: str,
         *,
-        default_model: str = "gpt-5-mini",
+        default_model: str = "gpt-6-luna",
+        reasoning_effort: Optional[str] = None,
         base_url: Optional[str] = None,
         enable_image_generation: bool = False,
     ):
         super().__init__(api_key, default_model=default_model)
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=60.0)
         self._image_generation_enabled = enable_image_generation
+        self._reasoning_effort = _openai_reasoning_effort(
+            {"OPENAI_REASONING_EFFORT": reasoning_effort or ""}
+        )
 
     async def chat_completion(
         self, messages: list[dict[str, Any]], model: Optional[str] = None, **kwargs: Any
@@ -343,6 +349,8 @@ class OpenAIProvider(BaseProvider):
         }
         if kwargs.get("max_tokens") is not None:
             request["max_output_tokens"] = kwargs["max_tokens"]
+        if self._reasoning_effort is not None:
+            request["reasoning"] = {"effort": self._reasoning_effort}
         for key in ("temperature", "top_p"):
             if kwargs.get(key) is not None:
                 request[key] = kwargs[key]
@@ -687,7 +695,7 @@ class ProviderManager:
     }
     _MODELS = {
         ProviderType.GEMINI: ("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        ProviderType.OPENAI: ("OPENAI_MODEL", "gpt-5-mini"),
+        ProviderType.OPENAI: ("OPENAI_MODEL", "gpt-6-luna"),
         ProviderType.CLAUDE: ("CLAUDE_MODEL", "claude-haiku-4-5-20251001"),
         ProviderType.GROK: ("GROK_MODEL", "grok-4.7"),
         ProviderType.GROQ: ("GROQ_MODEL", "openai/gpt-oss-20b"),
@@ -697,6 +705,7 @@ class ProviderManager:
 
     def __init__(self, environ: Optional[Mapping[str, str]] = None):
         self.environ = dict(os.environ if environ is None else environ)
+        self.openai_reasoning_effort = _openai_reasoning_effort(self.environ)
         self.providers: dict[ProviderType, BaseProvider] = {}
         self.current_provider = self._parse_provider(self.environ.get("DEFAULT_PROVIDER", "gemini"))
         self._cooldown_until: dict[ProviderType, float] = {}
@@ -737,6 +746,7 @@ class ProviderManager:
             }[provider_type]
             options: dict[str, Any] = {"default_model": model}
             if provider_type == ProviderType.OPENAI:
+                options["reasoning_effort"] = self.openai_reasoning_effort
                 options["enable_image_generation"] = self._enabled(
                     self.environ.get("ENABLE_IMAGE_GENERATION")
                 )

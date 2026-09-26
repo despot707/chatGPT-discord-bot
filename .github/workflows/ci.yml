@@ -51,8 +51,7 @@ jobs:
           $env:PYTHON_DOTENV_DISABLED = '1'
           pwsh -NoProfile -File ./run.ps1 -CheckConfig
           if ($LASTEXITCODE -ne 2) { throw 'Invalid configuration did not return exit code 2' }
-          $env:DISCORD_BOT_TOKEN = 'test-discord-token'
-          $env:GEMINI_API_KEY = 'test-gemini-key'
+          @('DISCORD_BOT_TOKEN=test-discord-token', 'GEMINI_API_KEY=test-gemini-key') | Set-Content .env
           pwsh -NoProfile -File ./run.ps1 -CheckConfig
           if ($LASTEXITCODE -ne 0) { throw 'Offline launcher check failed' }
 

@@ -115,6 +115,30 @@ async def test_openai_uses_responses_api_without_storage_and_exact_model():
 
 
 @pytest.mark.asyncio
+async def test_openai_luna_reasoning_effort_and_output_cap_are_forwarded_without_storage():
+    manager = ProviderManager(
+        {
+            "ALLOW_PAID_PROVIDERS": "true",
+            "OPENAI_API_KEY": "placeholder-key",
+            "OPENAI_REASONING_EFFORT": "none",
+        }
+    )
+    provider = manager.get_provider(ProviderType.OPENAI)
+    create = AsyncMock(return_value=SimpleNamespace(output_text="answer", output=[]))
+    provider.client.responses.create = create
+
+    await provider.chat_completion([{"role": "user", "content": "hello"}], max_tokens=73)
+
+    create.assert_awaited_once_with(
+        model="gpt-6-luna",
+        input=[{"role": "user", "content": "hello"}],
+        store=False,
+        max_output_tokens=73,
+        reasoning={"effort": "none"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_openai_serializes_image_on_last_user_message_as_responses_image():
     provider = OpenAIProvider("placeholder-key")
     create = AsyncMock(return_value=SimpleNamespace(output_text="image answer", output=[]))
@@ -282,6 +306,27 @@ def test_paid_provider_requires_explicit_allow_flag_and_legacy_key_alias_works()
     )
     assert allowed.get_available_providers() == [ProviderType.OPENAI]
     assert allowed.get_provider(ProviderType.OPENAI).default_model == "operator-model"
+
+
+def test_manager_leaves_openai_reasoning_effort_unset_by_default():
+    manager = ProviderManager({"ALLOW_PAID_PROVIDERS": "true", "OPENAI_API_KEY": "placeholder-key"})
+    provider = manager.get_provider(ProviderType.OPENAI)
+    assert provider.default_model == "gpt-6-luna"
+    assert provider._reasoning_effort is None
+
+
+def test_invalid_openai_reasoning_effort_is_rejected_without_echoing_value():
+    secretish_value = "high-private-value"
+    with pytest.raises(ValueError) as caught:
+        ProviderManager(
+            {
+                "ALLOW_PAID_PROVIDERS": "true",
+                "OPENAI_API_KEY": "placeholder-key",
+                "OPENAI_REASONING_EFFORT": secretish_value,
+            }
+        )
+    assert "OPENAI_REASONING_EFFORT" in str(caught.value)
+    assert secretish_value not in str(caught.value)
 
 
 def test_manager_captures_openai_image_generation_opt_in():

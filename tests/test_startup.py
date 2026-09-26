@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import main as main_module
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ BOT_ENV_KEYS = {
     "GEMINI_KEY",
     "OPENAI_API_KEY",
     "OPENAI_KEY",
+    "OPENAI_REASONING_EFFORT",
     "ANTHROPIC_API_KEY",
     "CLAUDE_KEY",
     "XAI_API_KEY",
@@ -32,13 +34,19 @@ BOT_ENV_KEYS = {
 }
 
 
-def run_check_config(overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_check_config(
+    overrides: dict[str, str] | None = None, *, env_file: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the real CLI with a clean bot environment and no ambient credentials."""
     env = {key: value for key, value in os.environ.items() if key.upper() not in BOT_ENV_KEYS}
     env["PYTHON_DOTENV_DISABLED"] = "1"
     env.update(overrides or {})
+    command = [sys.executable, str(MAIN_SCRIPT)]
+    if env_file is not None:
+        command.extend(["--env-file", str(env_file)])
+    command.append("--check-config")
     return subprocess.run(
-        [sys.executable, str(MAIN_SCRIPT), "--check-config"],
+        command,
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -139,6 +147,107 @@ def test_paid_provider_with_opt_in_passes_offline():
 
     assert result.returncode == 0
     assert "Configuration OK (provider: openai)." in result.stdout
+    assert_no_secrets(combined_output(result))
+
+
+def test_explicit_env_file_overrides_ambient_config_offline(tmp_path: Path):
+    env_file = tmp_path / "bot.env"
+    env_file.write_text(
+        "DISCORD_BOT_TOKEN=file-token\nDEFAULT_PROVIDER=groq\nGROQ_API_KEY=file-provider-key\n",
+        encoding="utf-8",
+    )
+    result = run_check_config(
+        {
+            "PYTHON_DOTENV_DISABLED": "1",
+            "DISCORD_BOT_TOKEN": "ambient-token",
+            "DEFAULT_PROVIDER": "openai",
+            "ALLOW_PAID_PROVIDERS": "true",
+            "OPENAI_API_KEY": "ambient-provider-key",
+        },
+        env_file=env_file,
+    )
+
+    assert result.returncode == 0
+    assert "Configuration OK (provider: groq)." in result.stdout
+    assert_no_secrets(combined_output(result))
+    assert "ambient-token" not in combined_output(result)
+    assert "ambient-provider-key" not in combined_output(result)
+
+
+def test_explicit_env_file_does_not_fall_back_to_ambient_legacy_key(tmp_path: Path):
+    env_file = tmp_path / "bot.env"
+    env_file.write_text(
+        "DISCORD_BOT_TOKEN=file-token\n"
+        "DEFAULT_PROVIDER=openai\n"
+        "ALLOW_PAID_PROVIDERS=true\n"
+        "OPENAI_API_KEY=\n",
+        encoding="utf-8",
+    )
+    result = run_check_config({"OPENAI_KEY": "ambient-legacy-key"}, env_file=env_file)
+
+    assert result.returncode == 2
+    assert "Missing API key for openai" in result.stdout
+    assert "ambient-legacy-key" not in combined_output(result)
+
+
+def test_explicit_env_file_does_not_inherit_omitted_provider(tmp_path: Path):
+    env_file = tmp_path / "bot.env"
+    env_file.write_text(
+        "DISCORD_BOT_TOKEN=file-token\nGROQ_API_KEY=file-provider-key\n",
+        encoding="utf-8",
+    )
+    result = run_check_config(
+        {
+            "DEFAULT_PROVIDER": "openai",
+            "ALLOW_PAID_PROVIDERS": "true",
+            "OPENAI_API_KEY": "ambient-provider-key",
+        },
+        env_file=env_file,
+    )
+
+    assert result.returncode == 2
+    assert "Missing API key for gemini" in result.stdout
+    assert "ambient-provider-key" not in combined_output(result)
+
+
+def test_explicit_env_file_key_wins_and_does_not_interpolate_ambient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    env_file = tmp_path / "bot.env"
+    env_file.write_text(
+        "DISCORD_BOT_TOKEN=file-token\n"
+        "DEFAULT_PROVIDER=groq\n"
+        "GROQ_API_KEY=file-provider-key\n"
+        "OPENAI_API_KEY=${AMBIENT_PROVIDER_KEY}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GROQ_API_KEY", "ambient-provider-key")
+    monkeypatch.setenv("AMBIENT_PROVIDER_KEY", "ambient-secret")
+
+    captured: dict[str, str | None] = {}
+    real_validate = main_module.validate_environment
+
+    def capture_environment():
+        captured["groq"] = os.environ.get("GROQ_API_KEY")
+        captured["openai"] = os.environ.get("OPENAI_API_KEY")
+        captured["unrelated"] = os.environ.get("AMBIENT_PROVIDER_KEY")
+        return real_validate()
+
+    monkeypatch.setattr(main_module, "validate_environment", capture_environment)
+    assert main_module.main(["--env-file", str(env_file), "--check-config"]) == 0
+    assert captured == {
+        "groq": "file-provider-key",
+        "openai": "${AMBIENT_PROVIDER_KEY}",
+        "unrelated": "ambient-secret",
+    }
+
+
+def test_missing_explicit_env_file_fails_with_clear_sanitized_error(tmp_path: Path):
+    result = run_check_config(env_file=tmp_path / "missing.env")
+
+    assert result.returncode == 2
+    assert "specified env file does not exist" in result.stdout
+    assert "Traceback" not in combined_output(result)
     assert_no_secrets(combined_output(result))
 
 

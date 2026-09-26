@@ -6,6 +6,19 @@ import os
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
+OPENAI_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+
+def _openai_reasoning_effort(env: Mapping[str, str]) -> Optional[str]:
+    value = env.get("OPENAI_REASONING_EFFORT", "").strip().lower()
+    if not value:
+        return None
+    if value not in OPENAI_REASONING_EFFORTS:
+        raise ValueError(
+            "OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high, xhigh, or max"
+        )
+    return value
+
 
 def _bool(env: Mapping[str, str], name: str, default: bool = False) -> bool:
     value = env.get(name)
@@ -61,6 +74,7 @@ class BotConfig:
     web_max_chars: int = 12_000
     max_input_chars: int = 2000
     max_output_tokens: int = 1024
+    openai_reasoning_effort: Optional[str] = None
     history_messages: int = 20
     history_chars: int = 24000
     max_sessions: int = 1000
@@ -122,6 +136,7 @@ class BotConfig:
                 web_max_chars=web_max_chars,
                 max_input_chars=_int(env, "MAX_INPUT_CHARS", 2000),
                 max_output_tokens=_int(env, "MAX_OUTPUT_TOKENS", 1024),
+                openai_reasoning_effort=_openai_reasoning_effort(env),
                 history_messages=_int(env, "HISTORY_MESSAGES", 20),
                 history_chars=_int(env, "HISTORY_CHARS", 24000),
                 max_sessions=_int(env, "MAX_SESSIONS", 1000),
