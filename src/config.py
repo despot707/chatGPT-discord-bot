@@ -53,6 +53,12 @@ class BotConfig:
     allowed_channel_ids: frozenset[int] = frozenset()
     bot_admin_ids: frozenset[int] = frozenset()
     replyall_channel_ids: frozenset[int] = frozenset()
+    interaction_channel_ids: frozenset[int] = frozenset()
+    automatic_context_count: int = 0
+    enable_web_search: bool = False
+    enable_web_browsing: bool = True
+    web_max_bytes: int = 1_000_000
+    web_max_chars: int = 12_000
     max_input_chars: int = 2000
     max_output_tokens: int = 1024
     history_messages: int = 20
@@ -75,11 +81,22 @@ class BotConfig:
         provider = env.get("DEFAULT_PROVIDER", "gemini").strip().lower() or "gemini"
         if provider == "free":
             raise ValueError(
-                "DEFAULT_PROVIDER=free is no longer supported; migrate to gemini, openai, claude, grok, or ollama"
+                "DEFAULT_PROVIDER=free is no longer supported; migrate to gemini, groq, openrouter, openai, claude, grok, or ollama"
             )
-        if provider not in {"gemini", "openai", "claude", "grok", "ollama"}:
-            raise ValueError("DEFAULT_PROVIDER must be gemini, openai, claude, grok, or ollama")
+        if provider not in {"gemini", "groq", "openrouter", "openai", "claude", "grok", "ollama"}:
+            raise ValueError(
+                "DEFAULT_PROVIDER must be gemini, groq, openrouter, openai, claude, grok, or ollama"
+            )
         try:
+            automatic_context_count = _int(env, "AUTOMATIC_CONTEXT_COUNT", 0, minimum=0)
+            web_max_bytes = _int(env, "WEB_MAX_BYTES", 1_000_000)
+            web_max_chars = _int(env, "WEB_MAX_CHARS", 12_000)
+            if automatic_context_count > 20:
+                raise ValueError("AUTOMATIC_CONTEXT_COUNT must be at most 20")
+            if web_max_bytes > 2_000_000:
+                raise ValueError("WEB_MAX_BYTES must be at most 2000000")
+            if web_max_chars > 20_000:
+                raise ValueError("WEB_MAX_CHARS must be at most 20000")
             return cls(
                 discord_bot_token=token,
                 default_provider=provider,
@@ -93,6 +110,16 @@ class BotConfig:
                 if env.get("BOT_ADMIN_IDS") is not None
                 else _ids(env, "ADMIN_USER_IDS"),
                 replyall_channel_ids=_ids(env, "REPLYALL_CHANNEL_IDS"),
+                interaction_channel_ids=_ids(env, "INTERACTION_CHANNEL_IDS"),
+                automatic_context_count=automatic_context_count,
+                enable_web_search=_bool(
+                    env,
+                    "ENABLE_WEB_SEARCH",
+                    default=bool(env.get("TAVILY_API_KEY", "").strip()),
+                ),
+                enable_web_browsing=_bool(env, "ENABLE_WEB_BROWSING", default=True),
+                web_max_bytes=web_max_bytes,
+                web_max_chars=web_max_chars,
                 max_input_chars=_int(env, "MAX_INPUT_CHARS", 2000),
                 max_output_tokens=_int(env, "MAX_OUTPUT_TOKENS", 1024),
                 history_messages=_int(env, "HISTORY_MESSAGES", 20),

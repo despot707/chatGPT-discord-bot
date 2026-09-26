@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from src.aclient import DiscordClient
 from src.config import BotConfig
+from src.providers import CompletionResult, ProviderType
 
 
 class Provider:
@@ -39,6 +40,11 @@ class Manager:
 
     def get_provider_models(self, provider_type=None):
         return self.provider.get_available_models()
+
+    async def complete(self, messages, *, provider_type=None, model=None, images=(), **kwargs):
+        await self.provider.chat_completion(messages, model=model, **kwargs)
+        selected = provider_type or ProviderType.GEMINI
+        return CompletionResult(self.provider.answer, selected, model or "fake-model", (selected,))
 
 
 def interaction(private=True):

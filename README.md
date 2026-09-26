@@ -1,89 +1,99 @@
 # ChatGPT Discord Bot
 
-A self-hosted Discord assistant with isolated conversations, slash commands, and selectable AI providers. The name describes the Discord experience; the project does not include a free OpenAI API key or proxy ChatGPT subscriptions.
+A self-hosted Discord assistant with slash commands, bounded conversations, web tools, image input, and selectable AI providers. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
 
-## Free model option
+## Commands and behavior
 
-The default provider is Google Gemini, using `gemini-3.5-flash-lite` when the model is set to `auto`. Google currently offers free Gemini API usage for eligible models and within account rate limits. The free tier may change, access and quotas vary by model and region, and Google says free-tier content may be used to improve its products. Review Google's [model list](https://ai.google.dev/gemini-api/docs/models), [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) before choosing a model.
+- `/chat` sends a prompt to the selected provider. It accepts an optional image attachment, `use_web`, and `context_messages` from 0 to 20. Replies are private by default; `/private` changes that setting for your chats in the current channel.
+- `/search(query)` searches with Tavily and asks the selected AI provider to summarize up to five returned sources.
+- `/browse(url, question)` fetches and summarizes a public HTML or plain-text page. It does not run JavaScript or sign in to websites.
+- `/image(url, caption)` fetches an existing public image and sends it using your private/public reply setting. This is not AI image generation.
+- `/draw(prompt)` requests image generation when enabled and supported. In this build, generation is an optional paid OpenAI feature: it requires `ENABLE_IMAGE_GENERATION=true`, `ALLOW_PAID_PROVIDERS=true`, an OpenAI API key, and a compatible model. There is no free image-generation provider configured by default.
+- `/provider`, `/reset`, `/switchpersona`, `/status`, and `/help` select a provider, clear your conversation, select a style, show local settings, and list commands. `/replyall` toggles replies to ordinary channel messages for administrators in explicitly configured channels.
 
-OpenAI's API is billed separately from ChatGPT plans. This bot does not treat ChatGPT Free, Plus, or Pro access as API credits. OpenAI is available only when you configure an API key and explicitly allow paid providers. See [OpenAI API pricing](https://developers.openai.com/api/docs/pricing). The bot does not switch to a paid provider when a free provider hits a quota or errors.
-
-For local inference, Ollama can serve an already-installed model on your machine. The bot does not download models. Paid OpenAI, Anthropic, and xAI providers are optional. Image generation is disabled unless enabled and supported by your configured provider.
-
-## What it does
-
-- `/chat` sends a prompt to the selected provider.
-- `/provider` selects an enabled provider and model.
-- `/reset` clears the caller's conversation for the current Discord scope.
-- `/private` toggles private or public `/chat` replies for the caller in that channel. `/chat` starts private by default.
-- `/switchpersona` selects standard, creative, technical, or casual style. Configured bot administrators can also access the legacy jailbreak persona names; those prompts do not grant model capabilities or bypass provider safeguards.
-- `/replyall` can enable replies to ordinary channel messages. It requires message content intent and should be limited to trusted channels. See the access controls below.
-- `/draw` requests image generation when the feature is enabled and supported by the selected provider; `/help` shows the available commands.
-- `/status` reports local configuration without contacting providers, and `python main.py --check-config` validates configuration without starting Discord.
-
-Conversation history and settings live in memory and are separated by user and Discord scope; they are not a durable chat archive. The default `/chat` visibility is private, so a restart or session expiry cannot silently switch it to public. `/private` changes that user's `/chat` visibility in the current channel. Ordinary `/replyall` responses are always public and do not use private chat history. Restarting the process or expiring an idle session clears history and restores the private default. The bot does not post an unsolicited startup message. Configure `system_prompt.txt` to set the assistant's base instructions.
+Conversation history and settings are held in memory, separated by user and Discord scope. A restart or idle expiry clears them. The bot does not provide general Discord control, member moderation, or self-bot behavior.
 
 ## Requirements
 
-- Python 3.12 or 3.13
+- Python 3.12 or 3.13 for Windows hosting
 - A Discord application and bot token
-- A Gemini API key for the default provider, or credentials for another enabled provider
+- A Gemini key for the default provider, or credentials/configuration for another provider
 
-### 1. Create the Discord application
+Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and invite it with the `bot` and `applications.commands` OAuth scopes. Grant only the channel permissions it needs, such as View Channel and Send Messages; add Embed Links and Attach Files for image features. If using threads, grant Send Messages in Threads.
 
-Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and copy its token into `.env`. Invite it with the `bot` and `applications.commands` OAuth scopes. Grant only the channel permissions it needs, such as View Channel, Send Messages, Embed Links, and Attach Files when using image features.
+Slash commands work without Message Content Intent. To let the bot answer when mentioned or when someone replies to it in selected channels, set `ENABLE_MESSAGE_CONTENT=true` and list channel IDs in `INTERACTION_CHANNEL_IDS`; enable Message Content Intent for the bot in the Developer Portal as well. Automatic context is off by default (`AUTOMATIC_CONTEXT_COUNT=0`); when enabled, it reads up to 20 earlier messages in that same channel. Both the bot and the invoking user need View Channel and Read Message History permissions for that channel.
 
-Slash commands work without Message Content Intent. Leave `ENABLE_MESSAGE_CONTENT=false` unless you want `/replyall`; for that feature, enable Message Content Intent in the Developer Portal and configure `REPLYALL_CHANNEL_IDS` with the allowed channel IDs. A user must have Manage Channels or be listed in `BOT_ADMIN_IDS` to toggle it. The bot needs View Channel and Read Message History in those channels.
+`/replyall` has separate controls: configure `REPLYALL_CHANNEL_IDS`, enable Message Content Intent in Discord and in `.env`, then a user with Manage Channels permission or an ID in `BOT_ADMIN_IDS` must toggle it in each channel. The bot needs View Channel and Read Message History there. Keep this feature limited to trusted channels.
 
-### 2. Install and configure
+## Run on Windows
+
+From PowerShell in the repository folder:
 
 ```powershell
-Copy-Item .env.example .env
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+.\setup.ps1
 ```
 
-On macOS or Linux, use `python3.12 -m venv .venv` and `source .venv/bin/activate`, then run the same two pip commands.
+The script finds Python 3.12 or 3.13, creates the project-local `.venv`, installs the pinned runtime requirements, and copies `.env.example` to `.env` only if `.env` does not already exist. To select a specific interpreter, use `.\setup.ps1 -PythonPath 'C:\Path\To\python.exe'`. Setup does not change PowerShell's execution policy or start the bot. If your current policy blocks local scripts, run the script for this process only:
 
-Set `DISCORD_BOT_TOKEN` and `GEMINI_API_KEY` in `.env`, then run:
-
-```sh
-python main.py
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-Keep `.env` private. Never paste bot tokens or provider keys into Discord or commit them to Git.
+Put your Discord token and provider keys in `.env`, which is ignored by Git. Check the configuration offline, then start the bot:
 
-## Provider and cost settings
+```powershell
+.\run.ps1 -CheckConfig
+.\run.ps1
+```
 
-`DEFAULT_PROVIDER=gemini` and `DEFAULT_MODEL=auto` select the default. Provider selection is limited to providers that have valid local configuration. `ALLOW_PAID_PROVIDERS=false` is the safe default: OpenAI, Anthropic, and xAI are not made available until you opt in. This flag is a bot-side gate, not a billing cap supplied by those services. Gemini billing and quotas belong to the Google Cloud project associated with the key; use a free-tier project with billing disabled if you need to avoid paid Gemini usage. Quota errors are reported and do not trigger paid fallback.
+Keep that PowerShell window open while hosting on your PC. `run.ps1` uses the repository's `.venv` and returns the bot process exit code. The check validates local settings only; it does not contact Discord or verify that credentials, quotas, or models work.
 
-| Provider | Key / settings | Notes |
+## Run on Railway
+
+The repository includes a Dockerfile and Railway configuration for one always-on worker process. To host it, connect this repository as a Railway service and deploy from the repository root. Add `DISCORD_BOT_TOKEN` and the provider keys as Railway service variables; add other settings from `.env.example` as needed. Do not put secret values in Git, README files, or a committed `.env`.
+
+This is an outbound Discord worker. It does not serve an HTTP website, so Railway does not need a public domain or health-check port for it. The checked-in Railway configuration sets one replica, disables sleeping, and restarts on failure up to the configured retry limit. This documents the deployment setup; it does not mean a Railway deployment has been performed or verified.
+
+Do not run a PC-hosted copy and a Railway copy at the same time with the same Discord token. Run one active instance to avoid duplicate responses and conflicting session state.
+
+Railway's Free plan includes $1 of monthly usage credit, and new Trial accounts receive a one-time $5 credit. Those credits do not guarantee enough resources for uninterrupted 24/7 operation; check the current [Railway plans and pricing](https://docs.railway.com/pricing/plans) and usage before relying on it. Provider API charges are separate.
+
+## Providers, fallback, and costs
+
+Set `DEFAULT_PROVIDER` and optionally `DEFAULT_MODEL`; `/provider` can also change the selection per user and channel. Available provider keys are:
+
+| Provider | Environment variables | Notes |
 | --- | --- | --- |
-| Gemini | `GEMINI_API_KEY`, optional `GEMINI_MODEL` | Free-tier quota may be available; model access and limits vary. |
-| OpenAI | `OPENAI_API_KEY`, optional `OPENAI_MODEL` | API use requires separate API billing. Requires `ALLOW_PAID_PROVIDERS=true`. |
-| Anthropic | `ANTHROPIC_API_KEY`, optional `CLAUDE_MODEL` | Requires `ALLOW_PAID_PROVIDERS=true`. |
-| xAI | `XAI_API_KEY`, optional `GROK_MODEL` | Requires `ALLOW_PAID_PROVIDERS=true`. |
-| Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | Local OpenAI-compatible endpoint; install and start the model yourself. |
+| Gemini | `GEMINI_API_KEY`, optional `GEMINI_MODEL` | Default candidate: `gemini-3.5-flash-lite`. Free quotas and model access vary. |
+| Groq | `GROQ_API_KEY`, optional `GROQ_MODEL` | Default candidate: `openai/gpt-oss-20b`. |
+| OpenRouter | `OPENROUTER_API_KEY`, optional `OPENROUTER_MODEL` | Default candidate: `openrouter/free`; the free router may select changing models. |
+| Ollama | `OLLAMA_MODEL`, optional `OLLAMA_BASE_URL` | Local OpenAI-compatible endpoint; install and start the model yourself. Image input requires `OLLAMA_SUPPORTS_VISION=true` and a vision-capable model. |
+| OpenAI | `OPENAI_API_KEY`, optional `OPENAI_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`; API billing is separate from ChatGPT plans. |
+| Anthropic | `ANTHROPIC_API_KEY`, optional `CLAUDE_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
+| xAI | `XAI_API_KEY`, optional `GROK_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
 
-For backward compatibility, `GEMINI_KEY`, `OPENAI_KEY`, `CLAUDE_KEY`, and `GROK_KEY` are accepted as aliases. Canonical names are preferred. Ollama defaults to `http://localhost:11434/v1`; inside Docker, `localhost` refers to the container, so set a reachable host URL explicitly. Follow [Ollama's OpenAI compatibility guide](https://ollama.com/blog/openai-compatibility).
+The default fallback order is `gemini,groq,openrouter,ollama`. Only providers with configured credentials/models are available. `MAX_PROVIDER_ATTEMPTS` allows 1–3 total provider attempts (including the selected provider); each attempt is capped at 20 seconds, within the 60-second default overall request timeout. `ENABLE_PROVIDER_FALLBACK=false` turns fallback off. The bot retries rate limits, timeouts, network errors, and server errors; authentication, safety, and other non-retryable failures stop the request. A retryable failure puts that provider on a fixed 30-second cooldown. Image requests only go to configured providers that advertise vision support; Groq and the default OpenRouter free router are text-only, and Ollama vision is opt-in.
 
-`ENABLE_IMAGE_GENERATION=true` enables the feature only where the selected provider supports it. It is off by default. No provider fallback is used for image generation either.
+The bot cannot detect whether your Gemini or Groq account has paid billing enabled. Use provider accounts configured for free usage or disable paid billing there if you need that boundary. OpenRouter's default free router and free model IDs are restricted unless you opt into paid providers. `ALLOW_PAID_PROVIDERS` is a bot-side gate, not a provider billing cap.
 
-## Access and privacy
+For Gemini's current model list, pricing, and limits, see Google's [models](https://ai.google.dev/gemini-api/docs/models), [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). Google says data from unpaid Gemini API services may be used to improve its products, so do not send sensitive information on that tier. Groq publishes its current [free-plan model rate limits](https://console.groq.com/docs/rate-limits) and [billing details](https://console.groq.com/docs/billing-faqs). OpenRouter lists [free models](https://openrouter.ai/collections/free-models/) and its [free-model usage limits](https://openrouter.ai/docs/faq#how-does-the-free-models-router-work). Availability, terms, quotas, and billing can change at those services.
 
-Set `ALLOWED_GUILD_IDS` and/or `ALLOWED_CHANNEL_IDS` to restrict where the bot accepts requests. Set `BOT_ADMIN_IDS` to comma-separated Discord user IDs for administrator-only controls and legacy restricted personas. `REPLYALL_CHANNEL_IDS` limits where `/replyall` can run. The bot's in-memory history is sent to the selected AI provider as conversation context; provider data handling follows that provider's terms and privacy settings. Gemini's free tier has a data-use caveat described above. Avoid sending sensitive information.
+### Web and image data
 
-The bot applies bounded input, output, history, concurrency, and cooldown settings. Tune these through the documented limits in `.env.example`. They help control load; provider-side quotas and account billing remain outside the bot's control.
+Set `TAVILY_API_KEY` to use `/search`; web search is enabled automatically when a key is present, unless `ENABLE_WEB_SEARCH` overrides it. Tavily currently lists 1,000 free API credits per month; credits can run out, after which searches stop until reset or upgrade. See [Tavily pricing](https://www.tavily.com/pricing). Search queries are sent to Tavily. Search results, fetched page text, chat history, and image inputs are sent to the selected AI provider as needed to answer; check both providers' data terms and avoid sensitive content.
 
-## Configuration check
+Web browsing accepts only public HTTP/HTTPS pages served as HTML or plain text. It does not execute scripts or access authenticated pages. URL validation and DNS checks block private and reserved network addresses. Discord image uploads are limited to 5 MB and 20 million pixels and are decoded for validation before use.
 
-```sh
-python main.py --check-config
-```
+## Configuration reference
 
-This is an offline configuration check. It does not verify that credentials are valid, contact Discord or an AI provider, or confirm that a model is available to your account.
+See [.env.example](.env.example) for all supported settings and defaults. Important access settings include:
+
+- `ALLOWED_GUILD_IDS` and `ALLOWED_CHANNEL_IDS` to restrict where the bot accepts interactions.
+- `BOT_ADMIN_IDS` for configured bot administrators.
+- `INTERACTION_CHANNEL_IDS`, `ENABLE_MESSAGE_CONTENT`, and `AUTOMATIC_CONTEXT_COUNT` for mention/reply listening and optional channel context.
+- `REPLYALL_CHANNEL_IDS` for administrator-controlled reply-all mode.
+
+Run `.\run.ps1 -CheckConfig` on Windows, or `python main.py --check-config` elsewhere, to validate configuration without connecting to Discord. It does not verify credentials, quota, or model availability.
 
 ## Docker
 
@@ -95,7 +105,7 @@ docker compose logs -f
 docker compose down
 ```
 
-The image runs as a non-root user and the container uses a read-only root filesystem. Docker Compose does not expose ports because the bot connects outward to Discord and its provider.
+The container runs as a non-root user with a read-only root filesystem and needs outbound network access, but no inbound port.
 
 ## Development
 
@@ -107,7 +117,7 @@ mypy src main.py utils
 pytest
 ```
 
-The GitHub Actions workflow runs lint, formatting, type checks, tests, bytecode compilation, dependency consistency checks, and a Python 3.12/3.13 matrix.
+The GitHub Actions workflow runs lint, formatting, type checks, tests, bytecode compilation, dependency consistency checks, and Python 3.12/3.13 checks.
 
 ## License
 

@@ -17,6 +17,8 @@ KEY_NAMES = {
     "openai": ("OPENAI_API_KEY", "OPENAI_KEY"),
     "claude": ("ANTHROPIC_API_KEY", "CLAUDE_KEY"),
     "grok": ("XAI_API_KEY", "GROK_KEY"),
+    "groq": ("GROQ_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
 }
 
 
@@ -27,8 +29,9 @@ def validate_environment(environ=None) -> BotConfig:
         raise ValueError(f"{config.default_provider} requires ALLOW_PAID_PROVIDERS=true")
     key_names = KEY_NAMES.get(config.default_provider, ())
     if key_names and not any(env.get(name, "").strip() for name in key_names):
+        alias = f" (legacy alias: {key_names[1]})" if len(key_names) > 1 else ""
         raise ValueError(
-            f"Missing API key for {config.default_provider}; set {key_names[0]} (legacy alias: {key_names[1]})"
+            f"Missing API key for {config.default_provider}; set {key_names[0]}{alias}"
         )
     if config.default_provider == "ollama":
         model = env.get("OLLAMA_MODEL", "").strip()

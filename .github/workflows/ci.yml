@@ -9,10 +9,11 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.12", "3.13"]
     steps:
       - name: Check out repository
@@ -39,6 +40,21 @@ jobs:
         run: python -m pip check
       - name: Audit runtime dependencies
         run: pip-audit -r requirements.txt
+      - name: Verify Windows setup and launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          '# Preserve this existing configuration' | Set-Content .env
+          $before = (Get-FileHash .env).Hash
+          ./setup.ps1 -PythonPath (Get-Command python).Source
+          if ((Get-FileHash .env).Hash -ne $before) { throw 'Setup overwrote .env' }
+          $env:PYTHON_DOTENV_DISABLED = '1'
+          pwsh -NoProfile -File ./run.ps1 -CheckConfig
+          if ($LASTEXITCODE -ne 2) { throw 'Invalid configuration did not return exit code 2' }
+          $env:DISCORD_BOT_TOKEN = 'test-discord-token'
+          $env:GEMINI_API_KEY = 'test-gemini-key'
+          pwsh -NoProfile -File ./run.ps1 -CheckConfig
+          if ($LASTEXITCODE -ne 0) { throw 'Offline launcher check failed' }
 
   docker:
     runs-on: ubuntu-latest

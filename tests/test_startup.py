@@ -22,6 +22,8 @@ BOT_ENV_KEYS = {
     "CLAUDE_KEY",
     "XAI_API_KEY",
     "GROK_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
     "DEFAULT_PROVIDER",
     "ALLOW_PAID_PROVIDERS",
     "OLLAMA_MODEL",
@@ -62,6 +64,22 @@ def test_missing_discord_token_fails_cleanly():
     assert "DISCORD_BOT_TOKEN" in result.stdout
     assert "Traceback" not in combined_output(result)
     assert_no_secrets(combined_output(result))
+
+
+@pytest.mark.parametrize(
+    ("provider", "key"), [("groq", "GROQ_API_KEY"), ("openrouter", "OPENROUTER_API_KEY")]
+)
+def test_free_fallback_provider_can_be_the_primary(provider, key):
+    missing = run_check_config(
+        {"DISCORD_BOT_TOKEN": SECRET_VALUES[0], "DEFAULT_PROVIDER": provider}
+    )
+    assert missing.returncode == 2
+    assert key in missing.stdout
+    valid = run_check_config(
+        {"DISCORD_BOT_TOKEN": SECRET_VALUES[0], "DEFAULT_PROVIDER": provider, key: SECRET_VALUES[1]}
+    )
+    assert valid.returncode == 0
+    assert_no_secrets(combined_output(valid))
 
 
 def test_discord_token_without_gemini_key_fails_cleanly():

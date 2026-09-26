@@ -38,6 +38,7 @@ mypy_extensions==1.1.0
 openai==2.54.0
 packageurl-python==0.17.6
 packaging==26.3
+Pillow==12.3.0
 pathspec==1.1.1
 pip-requirements-parser==32.0.1
 pip_api==0.0.35

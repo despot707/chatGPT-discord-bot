@@ -8,9 +8,12 @@ from src.providers import (
     ClaudeProvider,
     GeminiProvider,
     GrokProvider,
+    GroqProvider,
+    ImageInput,
     ModelInfo,
     OllamaProvider,
     OpenAIProvider,
+    OpenRouterProvider,
     ProviderError,
     ProviderManager,
     ProviderType,
@@ -53,6 +56,25 @@ async def test_gemini_sends_entire_conversation_in_one_async_request():
 
 
 @pytest.mark.asyncio
+async def test_gemini_serializes_image_as_inline_data_on_last_user_message():
+    provider = GeminiProvider("placeholder-key")
+    call = AsyncMock(return_value=SimpleNamespace(text="answer", prompt_feedback=None))
+    provider.client.aio.models.generate_content = call
+    await provider.chat_completion(
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "response"},
+            {"role": "user", "content": "last"},
+        ],
+        images=(ImageInput(b"image-bytes", "image/png"),),
+    )
+    parts = call.await_args.kwargs["contents"][-1].parts
+    assert parts[0].text == "last"
+    assert parts[1].inline_data.mime_type == "image/png"
+    assert parts[1].inline_data.data == b"image-bytes"
+
+
+@pytest.mark.asyncio
 async def test_gemini_empty_or_blocked_response_is_clear():
     provider = GeminiProvider("placeholder-key")
     provider.client.aio.models.generate_content = AsyncMock(
@@ -90,6 +112,56 @@ async def test_openai_uses_responses_api_without_storage_and_exact_model():
     create.assert_awaited_once_with(
         model="caller-selected-model", input=messages, store=False, max_output_tokens=99
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_serializes_image_on_last_user_message_as_responses_image():
+    provider = OpenAIProvider("placeholder-key")
+    create = AsyncMock(return_value=SimpleNamespace(output_text="image answer", output=[]))
+    provider.client.responses.create = create
+    image = ImageInput(b"image-bytes", "image/png")
+    await provider.chat_completion([{"role": "user", "content": "describe"}], images=(image,))
+    content = create.await_args.kwargs["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "describe"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"] == "data:image/png;base64,aW1hZ2UtYnl0ZXM="
+
+
+@pytest.mark.asyncio
+async def test_claude_serializes_image_as_base64_content_block():
+    provider = ClaudeProvider("placeholder-key")
+    provider.client.messages.create = AsyncMock(
+        return_value=SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    )
+    await provider.chat_completion(
+        [{"role": "user", "content": "describe"}],
+        images=(ImageInput(b"image-bytes", "image/png"),),
+    )
+    blocks = provider.client.messages.create.await_args.kwargs["messages"][0]["content"]
+    assert blocks == [
+        {"type": "text", "text": "describe"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2UtYnl0ZXM="},
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grok_serializes_image_url_data_block():
+    provider = GrokProvider("placeholder-key")
+    provider.client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+    )
+    await provider.chat_completion(
+        [{"role": "user", "content": "describe"}],
+        images=(ImageInput(b"image-bytes", "image/png"),),
+    )
+    content = provider.client.chat.completions.create.await_args.kwargs["messages"][0]["content"]
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"] == "data:image/png;base64,aW1hZ2UtYnl0ZXM="
 
 
 @pytest.mark.asyncio
@@ -160,6 +232,34 @@ def test_manager_defaults_to_gemini_and_uses_its_free_tier_key_only():
         manager.get_provider(ProviderType.OPENAI)
 
 
+def test_manager_configures_groq_and_openrouter_as_openai_compatible_providers():
+    manager = ProviderManager(
+        {"GROQ_API_KEY": "groq-placeholder", "OPENROUTER_API_KEY": "router-placeholder"}
+    )
+    assert manager.get_available_providers() == [ProviderType.GROQ, ProviderType.OPENROUTER]
+    groq = manager.get_provider(ProviderType.GROQ)
+    router = manager.get_provider(ProviderType.OPENROUTER)
+    assert isinstance(groq, GroqProvider)
+    assert isinstance(router, OpenRouterProvider)
+    assert groq.default_model == "openai/gpt-oss-20b"
+    assert router.default_model == "openrouter/free"
+    assert str(groq.client.base_url).rstrip("/") == "https://api.groq.com/openai/v1"
+    assert str(router.client.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_free_guard_cannot_be_bypassed_by_configured_model():
+    manager = ProviderManager(
+        {
+            "DEFAULT_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "placeholder",
+            "OPENROUTER_MODEL": "vendor/paid-model",
+        }
+    )
+    with pytest.raises(ProviderError, match="free"):
+        await manager.complete([{"role": "user", "content": "hello"}])
+
+
 def test_manager_reports_missing_gemini_credentials_and_free_migration():
     manager = ProviderManager({})
     with pytest.raises(ProviderError, match="GEMINI_API_KEY"):
@@ -225,6 +325,7 @@ def test_manager_supports_explicit_local_ollama_without_downloading_models():
     provider = manager.get_provider()
     assert isinstance(provider, OllamaProvider)
     assert provider.default_model == "already-installed-model"
+    assert provider.supports_vision() is False
     assert str(provider.client.base_url).rstrip("/") == "http://127.0.0.1:11434/v1"
     with pytest.raises(ProviderError, match="set OLLAMA_MODEL"):
         ProviderManager({"DEFAULT_PROVIDER": "ollama"}).get_provider()
@@ -245,6 +346,17 @@ async def test_ollama_uses_openai_compatible_chat_completions():
         model="already-installed-model", messages=messages, max_tokens=20
     )
     assert provider.supports_image_generation() is False
+
+
+def test_ollama_vision_requires_explicit_environment_opt_in():
+    manager = ProviderManager(
+        {
+            "DEFAULT_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "vision-model",
+            "OLLAMA_SUPPORTS_VISION": "true",
+        }
+    )
+    assert manager.get_provider().supports_vision() is True
 
 
 @pytest.mark.asyncio

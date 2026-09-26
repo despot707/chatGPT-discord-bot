@@ -32,3 +32,23 @@ def test_allowlists_parse_positive_ids_and_invalid_values_fail():
     assert config.allowed_channel_ids == frozenset({1, 2})
     with pytest.raises(ValueError, match="ALLOWED_CHANNEL_IDS"):
         BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "ALLOWED_CHANNEL_IDS": "0"})
+
+
+def test_discord_context_and_web_limits_are_bounded():
+    config = BotConfig.from_env(
+        {
+            "DISCORD_BOT_TOKEN": "test",
+            "ENABLE_MESSAGE_CONTENT": "true",
+            "INTERACTION_CHANNEL_IDS": "21,22",
+            "AUTOMATIC_CONTEXT_COUNT": "5",
+            "ENABLE_WEB_SEARCH": "true",
+            "TAVILY_API_KEY": "configured",
+        }
+    )
+    assert config.interaction_channel_ids == frozenset({21, 22})
+    assert config.automatic_context_count == 5
+    assert config.enable_web_search
+    with pytest.raises(ValueError, match="AUTOMATIC_CONTEXT_COUNT"):
+        BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "AUTOMATIC_CONTEXT_COUNT": "21"})
+    with pytest.raises(ValueError, match="WEB_MAX_BYTES"):
+        BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "WEB_MAX_BYTES": "2000001"})

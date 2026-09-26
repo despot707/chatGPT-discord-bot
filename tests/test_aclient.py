@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from src.aclient import DiscordClient
 from src.config import BotConfig
-from src.providers import ProviderType
+from src.providers import CompletionResult, ProviderType
 
 
 class FakeProvider:
@@ -28,6 +28,11 @@ class FakeManager:
 
     def get_provider(self, provider_type=None):
         return self.provider
+
+    async def complete(self, messages, *, provider_type=None, model=None, images=(), **kwargs):
+        text = await self.provider.chat_completion(messages, model=model, **kwargs)
+        selected = provider_type or ProviderType.GEMINI
+        return CompletionResult(text, selected, model or "fake-model", (selected,))
 
 
 def make_client(**overrides):
