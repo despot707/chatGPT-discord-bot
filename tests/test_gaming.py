@@ -81,7 +81,10 @@ def test_memory_database_and_close_are_supported():
 
 
 def test_expanded_home_path_is_used_for_database(tmp_path, monkeypatch):
+    # pathlib uses USERPROFILE on Windows and HOME on POSIX. Keep this test's
+    # temporary home scoped to the fixture so it never writes in the real home.
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     path = "~/nested/gaming.sqlite3"
     store = GamingStore(path)
     store.link_steam(1, 2, "76561198000000002", "Name")
