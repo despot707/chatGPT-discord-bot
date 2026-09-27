@@ -81,12 +81,8 @@ try {
         throw "Worker PID $($remainingWorkers[0].ProcessId) is still running. Metadata was kept for a safe retry."
     }
 
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $rootPid" -ErrorAction SilentlyContinue
+    $process = Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths
     if ($process) {
-        if (-not (Test-LocalBotProcessIdentity -Process $process -Paths $paths) -or
-            -not (Test-LocalBotMetadataMatch -Metadata $metadata -Process $process)) {
-            throw "PID $rootPid changed identity during shutdown. Refusing to stop it."
-        }
         Stop-Process -Id $rootPid -Force -ErrorAction Stop
     }
 

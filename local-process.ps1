@@ -95,6 +95,30 @@ function Test-LocalBotWorkerMetadataMatch {
     } catch { return $false }
 }
 
+function Get-LocalBotRootAfterWorkerShutdown {
+    param([Parameter(Mandatory)]$Metadata, [Parameter(Mandatory)]$Paths, [int]$WaitMilliseconds = 5000)
+    $rootPid = [int]$Metadata.processId
+    $deadline = [datetime]::UtcNow.AddMilliseconds($WaitMilliseconds)
+    do {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $rootPid" -ErrorAction SilentlyContinue
+        if (-not $process) { return $null }
+
+        $verified = (Test-LocalBotProcessIdentity -Process $process -Paths $Paths) -and
+            (Test-LocalBotMetadataMatch -Metadata $Metadata -Process $process)
+        $hasCompleteIdentity = $process.ExecutablePath -and $process.CommandLine -and $process.CreationDate
+        if (-not $verified -and $hasCompleteIdentity) {
+            throw "PID $rootPid changed identity during shutdown. Refusing to stop it."
+        }
+        if ([datetime]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Milliseconds 100
+    } while ($true)
+
+    if (-not $verified) {
+        throw "PID $rootPid could not be verified after its worker stopped. Metadata was kept for a safe retry."
+    }
+    return $process
+}
+
 function ConvertTo-LocalBotUtcDateTime {
     param([Parameter(Mandatory)]$Value)
     if ($Value -is [datetime]) {

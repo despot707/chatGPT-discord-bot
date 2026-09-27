@@ -45,6 +45,68 @@ if (Test-LocalBotMetadataMatch -Metadata $reusedPid -Process $valid) { throw 'Re
 $realDateTime = [pscustomobject]@{ ProcessId = 4321; ExecutablePath = $paths.Python; CreationDate = [datetime]::Parse('2026-09-27T12:00:00Z') }
 if (-not (Test-LocalBotMetadataMatch -Metadata $metadata -Process $realDateTime)) { throw 'DateTime process creation value was rejected.' }
 
+# A terminating Windows process can briefly retain its PID while CIM clears
+# its executable and command line. The root may only be killed if reverified.
+& {
+    $tombstone = [pscustomobject]@{
+        ProcessId = 4321; ExecutablePath = $null; CommandLine = $null; CreationDate = $null
+    }
+    $partial = [pscustomobject]@{
+        ProcessId = 4321; ExecutablePath = $paths.Python
+        CommandLine = $null; CreationDate = $valid.CreationDate
+    }
+    $changed = [pscustomobject]@{
+        ProcessId = 4321; ExecutablePath = 'C:\Python313\python.exe'
+        CommandLine = $valid.CommandLine; CreationDate = $valid.CreationDate
+    }
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param($ClassName, $Filter)
+        $result = $script:rootLookup[$script:rootLookupIndex]
+        $script:rootLookupIndex++
+        return $result
+    }
+
+    $script:rootLookup = @($tombstone, $null)
+    $script:rootLookupIndex = 0
+    if (Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths -WaitMilliseconds 1000) {
+        throw 'An exited launcher tombstone was treated as a live process.'
+    }
+    if ($script:rootLookupIndex -ne 2) { throw 'The launcher tombstone was not rechecked.' }
+
+    $script:rootLookup = @($partial, $tombstone, $null)
+    $script:rootLookupIndex = 0
+    if (Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths -WaitMilliseconds 1000) {
+        throw 'A partially cleared launcher identity was treated as a live process.'
+    }
+    if ($script:rootLookupIndex -ne 3) { throw 'A partially cleared launcher identity was not rechecked.' }
+
+    $script:rootLookup = @($changed)
+    $script:rootLookupIndex = 0
+    try {
+        Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths -WaitMilliseconds 0 | Out-Null
+        throw 'A changed live process was accepted during shutdown.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'changed identity') { throw }
+    }
+
+    $script:rootLookup = @($tombstone)
+    $script:rootLookupIndex = 0
+    try {
+        Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths -WaitMilliseconds 0 | Out-Null
+        throw 'An unverifiable live PID was accepted during shutdown.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'could not be verified') { throw }
+    }
+
+    $script:rootLookup = @($valid)
+    $script:rootLookupIndex = 0
+    $verifiedRoot = Get-LocalBotRootAfterWorkerShutdown -Metadata $metadata -Paths $paths -WaitMilliseconds 0
+    if (-not $verifiedRoot -or [int]$verifiedRoot.ProcessId -ne 4321) {
+        throw 'A verified live launcher was not returned for stopping.'
+    }
+}
+
 # Exercise the full launcher against a temporary fake bot. The copied interpreter
 # runs a script that sleeps; no Discord client or credentials are involved.
 $repo = $root
