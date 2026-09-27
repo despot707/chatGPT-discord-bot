@@ -11,7 +11,7 @@ from PIL import Image
 from src.aclient import BotRequestError, DiscordClient
 from src.config import BotConfig
 from src.providers import CompletionResult, ImageInput, ProviderType
-from src.web import WebSource
+from src.web import WebError, WebSource
 
 
 class CapturingManager:
@@ -101,6 +101,16 @@ async def test_global_allowlist_rejects_before_allocating_settings():
 
 
 @pytest.mark.asyncio
+async def test_shared_reset_requires_manage_channels_permission():
+    client, _, _ = make_client()
+    client._register_commands()
+    target = interaction()
+    target.permissions.manage_channels = False
+    await client._commands["reset"].callback(target, True)
+    assert "Manage Channels" in target.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_channel_messages_need_configured_explicit_mention_or_bot_reply():
     client, _, _ = make_client(enable_message_content=True, interaction_channel_ids=frozenset({2}))
     client._connection.user = SimpleNamespace(id=77)
@@ -129,7 +139,169 @@ async def test_channel_messages_need_configured_explicit_mention_or_bot_reply():
     await client.on_message(mentioned)
     assert client.settings
     conversation = next(iter(client.conversations.values()))
-    assert conversation.messages[0]["content"] == "hello"
+    assert conversation.messages[0]["content"] == "User 8: hello"
+
+
+@pytest.mark.asyncio
+async def test_explicit_mention_works_without_message_content_intent_or_channel_list():
+    client, manager, _ = make_client(enable_message_content=False)
+    client._connection.user = SimpleNamespace(id=77)
+    channel = SimpleNamespace(id=42, send=AsyncMock())
+
+    @asynccontextmanager
+    async def typing():
+        yield
+
+    channel.typing = typing
+    mentioned = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content="<@77> hello group",
+    )
+    await client.on_message(mentioned)
+    assert manager.calls
+    assert manager.calls[0][0][-1]["content"] == "Alex: hello group"
+
+
+@pytest.mark.asyncio
+async def test_mentioner_without_read_history_does_not_receive_saved_shared_turns():
+    client, manager, _ = make_client(enable_message_content=False)
+    client._connection.user = SimpleNamespace(id=77)
+    await client.respond(
+        (1, 2, 8),
+        "old confidential channel detail",
+        private=False,
+        speaker_label="Previous user",
+        include_shared_history=True,
+    )
+
+    class Channel:
+        id = 2
+
+        def __init__(self):
+            self.send = AsyncMock()
+
+        def typing(self):
+            @asynccontextmanager
+            async def _typing():
+                yield
+
+            return _typing()
+
+        def permissions_for(self, member):
+            return SimpleNamespace(
+                view_channel=True,
+                read_message_history=getattr(member, "id", None) == 77,
+            )
+
+    channel = Channel()
+    guild = SimpleNamespace(id=1, me=SimpleNamespace(id=77))
+    channel.guild = guild
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=9, bot=False, display_name="New user", name="New user"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=guild,
+        attachments=[],
+        content="<@77> answer this",
+    )
+    await client.on_message(message)
+    submitted = manager.calls[-1][0]
+    assert "old confidential channel detail" not in str(submitted)
+    assert "New user: answer this" in str(submitted)
+
+
+@pytest.mark.asyncio
+async def test_reply_to_bot_uses_readable_reference_text_and_image():
+    client, manager, _ = make_client(enable_message_content=True)
+    client._connection.user = SimpleNamespace(id=77)
+    bot_member = SimpleNamespace(id=77)
+    image = SimpleNamespace(
+        size=len(png_bytes()),
+        content_type="image/png",
+        read=AsyncMock(return_value=png_bytes()),
+    )
+
+    class Channel:
+        id = 2
+        guild = SimpleNamespace(me=bot_member)
+
+        def permissions_for(self, _member):
+            return SimpleNamespace(view_channel=True, read_message_history=True)
+
+        def typing(self):
+            @asynccontextmanager
+            async def _typing():
+                yield
+
+            return _typing()
+
+        async def send(self, *_args, **_kwargs):
+            return None
+
+    channel = Channel()
+    original = SimpleNamespace(
+        channel_id=2,
+        channel=channel,
+        author=SimpleNamespace(id=77, bot=True, display_name="Bot", name="Bot"),
+        content="the red object is a marker",
+        attachments=[image],
+    )
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[],
+        reference=SimpleNamespace(resolved=original),
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content="What color is it?",
+    )
+    await client.on_message(message)
+    assert (
+        "Referenced message from Bot: the red object is a marker"
+        in manager.calls[0][0][-1]["content"]
+    )
+    assert manager.calls[0][1] == (ImageInput(png_bytes(), "image/png"),)
+    assert all(
+        "image/" not in str(turn) for turn in next(iter(client.conversations.values())).messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_direct_url_does_not_cancel_mentioned_chat():
+    client, manager, web = make_client(enable_message_content=False)
+    client._connection.user = SimpleNamespace(id=77)
+    web.browse = AsyncMock(side_effect=WebError("That URL cannot be loaded."))
+    channel = SimpleNamespace(id=2, send=AsyncMock())
+
+    @asynccontextmanager
+    async def typing():
+        yield
+
+    channel.typing = typing
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content="<@77> what is this? https://example.test/file.gif",
+    )
+    await client.on_message(message)
+    assert manager.calls
+    submitted = manager.calls[0][0][-1]["content"]
+    assert "could not be loaded" in submitted
+    assert web.browse.await_args.args == ("https://example.test/file.gif",)
 
 
 @pytest.mark.asyncio

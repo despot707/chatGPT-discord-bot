@@ -54,6 +54,10 @@ jobs:
           @('DISCORD_BOT_TOKEN=test-discord-token', 'GEMINI_API_KEY=test-gemini-key') | Set-Content .env
           pwsh -NoProfile -File ./run.ps1 -CheckConfig
           if ($LASTEXITCODE -ne 0) { throw 'Offline launcher check failed' }
+      - name: Test local launcher lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tests/local-launcher.Tests.ps1
 
   docker:
     runs-on: ubuntu-latest
@@ -76,3 +80,5 @@ jobs:
           docker compose config -q
           docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.gaming import GamingStore, PartyPlayer; s=GamingStore('data/gaming.sqlite3'); s.join_party(1, 2, PartyPlayer(3, 'Container test')); s.close()"
           docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.gaming import GamingStore; s=GamingStore('data/gaming.sqlite3'); assert s.party(1, 2)[0].user_id == 3; s.close()"
+          docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.chat_store import ChatStore; s=ChatStore('data/chat.sqlite3'); s.append_turn((1, 2, 0), 'Remember the blue team', 'Remembered', max_messages=20, max_chars=24000); s.close()"
+          docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.chat_store import ChatStore; s=ChatStore('data/chat.sqlite3'); assert s.load((1, 2, 0), max_messages=20, max_chars=24000)[0]['content'] == 'Remember the blue team'; assert not s.load((1, 2, 3), max_messages=20, max_chars=24000); s.close()"

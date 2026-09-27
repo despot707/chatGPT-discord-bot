@@ -216,3 +216,63 @@ async def test_openrouter_model_override_must_be_free_without_paid_opt_in():
     gemini.chat_completion = AsyncMock(side_effect=ProviderError("busy", retryable=True))
     with pytest.raises(ProviderError, match="paid models are disabled"):
         await manager.complete([{"role": "user", "content": "question"}])
+
+
+@pytest.mark.asyncio
+async def test_native_web_search_is_openai_only_and_fallback_discloses_no_live_web():
+    manager = manager_with_three(
+        DEFAULT_PROVIDER="openai", ALLOW_PAID_PROVIDERS="true", OPENAI_API_KEY="placeholder"
+    )
+    openai = manager.get_provider(ProviderType.OPENAI)
+    groq = manager.get_provider(ProviderType.GROQ)
+    openai.chat_completion = AsyncMock(side_effect=ProviderError("busy", retryable=True))
+    groq.chat_completion = AsyncMock(return_value="Unverified answer")
+    messages = [{"role": "user", "content": "What is the latest news?"}]
+    result = await manager.complete(messages, web_search=True)
+    assert openai.chat_completion.await_args.kwargs["web_search"] is True
+    assert "web_search" not in groq.chat_completion.await_args.kwargs
+    assert result.text.startswith("Live web search is unavailable for this response.")
+    assert "Do not claim" in groq.chat_completion.await_args.args[0][0]["content"]
+    assert messages == [{"role": "user", "content": "What is the latest news?"}]
+
+
+@pytest.mark.asyncio
+async def test_native_web_search_disabled_by_default():
+    manager = manager_with_three()
+    provider = manager.get_provider()
+    provider.chat_completion = AsyncMock(return_value="Answer")
+    result = await manager.complete([{"role": "user", "content": "hello"}])
+    assert "web_search" not in provider.chat_completion.await_args.kwargs
+    assert result.text == "Answer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overall_timeout", [10, 60])
+async def test_native_web_attempt_gets_45_seconds_bounded_by_total_deadline(overall_timeout):
+    manager = manager_with_three(
+        DEFAULT_PROVIDER="openai", ALLOW_PAID_PROVIDERS="true", OPENAI_API_KEY="placeholder"
+    )
+    openai = manager.get_provider(ProviderType.OPENAI)
+    groq = manager.get_provider(ProviderType.GROQ)
+    openai.chat_completion = AsyncMock(side_effect=ProviderError("busy", retryable=True))
+    groq.chat_completion = AsyncMock(return_value="backup")
+    await manager.complete(
+        [{"role": "user", "content": "news"}],
+        web_search=True,
+        request_timeout=overall_timeout,
+    )
+    native_timeout = openai.chat_completion.await_args.kwargs["request_timeout"]
+    assert min(45, overall_timeout) - 1 <= native_timeout <= min(45, overall_timeout)
+    fallback_timeout = groq.chat_completion.await_args.kwargs["request_timeout"]
+    assert 0 < fallback_timeout <= min(20, overall_timeout)
+
+
+@pytest.mark.asyncio
+async def test_openai_without_native_web_keeps_normal_attempt_limit():
+    manager = manager_with_three(
+        DEFAULT_PROVIDER="openai", ALLOW_PAID_PROVIDERS="true", OPENAI_API_KEY="placeholder"
+    )
+    provider = manager.get_provider()
+    provider.chat_completion = AsyncMock(return_value="Answer")
+    await manager.complete([{"role": "user", "content": "hello"}], request_timeout=60)
+    assert provider.chat_completion.await_args.kwargs["request_timeout"] == 20

@@ -1,6 +1,16 @@
 # ChatGPT Discord Bot
 
-A self-hosted Discord assistant with slash commands, bounded conversations, web tools, image input, and selectable AI providers. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
+A self-hosted Discord assistant you can mention during a conversation. It supports saved channel chat, image input, web lookups, and selectable AI providers. Run it on your PC or as one Railway worker. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
+
+## Everyday chat
+
+Mention the actual bot account in Discord, for example `@Chat GPT can you check who's right here?`. Attach a screenshot to ask about it, or reply to a message and mention the bot to supply that message as context. Public bot conversations are shared within the channel or thread, so different people can continue the discussion. Private `/chat` conversations remain separate for each person.
+
+Enable `ENABLE_OPENAI_WEB_SEARCH=true` with an OpenAI model that supports Responses web search, such as GPT-6 Luna. The model can search when answering factual or current questions and show clickable source links. This uses the existing OpenAI key and incurs additional search charges; it is limited to one tool call per answer. URLs in an invocation can also be read using the public-page browser. Websites requiring login or JavaScript are not supported.
+
+Only completed conversations with the bot are saved, in `CHAT_DATABASE_PATH` (default `data/chat.sqlite3`). History is bounded by the configured message, character, session, and retention limits; the default retention is 30 days. It survives normal restarts. Nearby channel messages and uploaded image bytes are used for the current request, not saved as a background channel archive. Keep the database private. `/reset` clears your private chat here; `/reset channel:true` clears the shared channel conversation and requires Manage Channels or bot administrator permission. Personal provider/style/privacy settings reset on restart or idle expiry.
+
+Expiration is checked when chat history is accessed: expired turns are excluded from the next answer and deleted during that operation. An idle or stopped bot does not purge its database on a timer.
 
 ## Commands and behavior
 
@@ -11,7 +21,7 @@ A self-hosted Discord assistant with slash commands, bounded conversations, web 
 - `/draw(prompt)` requests image generation when enabled and supported. In this build, generation is an optional paid OpenAI feature: it requires `ENABLE_IMAGE_GENERATION=true`, `ALLOW_PAID_PROVIDERS=true`, an OpenAI API key, and a compatible model. There is no free image-generation provider configured by default.
 - `/provider`, `/reset`, `/switchpersona`, `/status`, and `/help` select a provider, clear your conversation, select a style, show local settings, and list commands. `/replyall` toggles replies to ordinary channel messages for administrators in explicitly configured channels.
 
-Conversation history and settings are held in memory, separated by user and Discord scope. A restart or idle expiry clears them. The bot does not provide general Discord control, member moderation, or self-bot behavior.
+The bot does not provide general Discord control, member moderation, or self-bot behavior. `/image` sends an existing image; `/draw` generates a new one only when the optional paid feature is enabled.
 
 ## Pick a game and build teams
 
@@ -43,7 +53,7 @@ On your PC, keep the `data` folder between runs. Docker Compose creates a writab
 
 Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and invite it with the `bot` and `applications.commands` OAuth scopes. Grant only the channel permissions it needs, such as View Channel and Send Messages; add Embed Links and Attach Files for image features. If using threads, grant Send Messages in Threads.
 
-Slash commands work without Message Content Intent. To let the bot answer when mentioned or when someone replies to it in selected channels, set `ENABLE_MESSAGE_CONTENT=true` and list channel IDs in `INTERACTION_CHANNEL_IDS`; enable Message Content Intent for the bot in the Developer Portal as well. Automatic context is off by default (`AUTOMATIC_CONTEXT_COUNT=0`); when enabled, it reads up to 20 earlier messages in that same channel. Both the bot and the invoking user need View Channel and Read Message History permissions for that channel.
+Slash commands and explicit bot mentions work without Message Content Intent. Empty `INTERACTION_CHANNEL_IDS` allows explicit mentions in every channel permitted by the server/channel allowlists; fill it to restrict mentions. For recent channel context and replies without an explicit mention, set `ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Developer Portal. `AUTOMATIC_CONTEXT_COUNT` defaults to 10 and can be set from 0 to 20. Both the bot and invoking user need View Channel and Read Message History for that channel. Without access to recent history, the bot can still answer the current mention. See [Discord's message-content rules](https://docs.discord.com/developers/events/gateway#message-content-intent).
 
 `/replyall` has separate controls: configure `REPLYALL_CHANNEL_IDS`, enable Message Content Intent in Discord and in `.env`, then a user with Manage Channels permission or an ID in `BOT_ADMIN_IDS` must toggle it in each channel. The bot needs View Channel and Read Message History there. Keep this feature limited to trusted channels.
 
@@ -70,6 +80,8 @@ Put your Discord token and provider keys in `.env`, which is ignored by Git. Che
 
 Keep that PowerShell window open while hosting on your PC. `run.ps1` uses the repository's `.venv` and returns the bot process exit code. The check validates local settings only; it does not contact Discord or verify that credentials, quotas, or models work.
 
+To run in the background instead, use `start-local.ps1`. Use `local-status.ps1` to check it and `stop-local.ps1` to stop it. Logs are written under `logs/`; the scripts track the local process and refuse to stop an unrelated process. Your PC must stay on, awake, and connected to the internet. After a reboot, start the bot again. Keep `.env` and `data/` between runs.
+
 `run.ps1` loads bot settings from the local `.env` file. The explicit `--env-file` option ignores inherited bot settings and credentials that are absent from that file, and treats `${NAME}` literally rather than expanding it from the process environment. Running `main.py` without that option keeps the usual environment-based behavior for cloud hosting.
 
 ## Run on Railway
@@ -77,6 +89,8 @@ Keep that PowerShell window open while hosting on your PC. `run.ps1` uses the re
 The repository includes a Dockerfile and Railway configuration for one always-on worker process. To host it, connect this repository as a Railway service and deploy from the repository root. Add `DISCORD_BOT_TOKEN` and the provider keys as Railway service variables; add other settings from `.env.example` as needed. Do not put secret values in Git, README files, or a committed `.env`.
 
 This is an outbound Discord worker. It does not serve an HTTP website, so Railway does not need a public domain or health-check port for it. The checked-in Railway configuration sets one replica, disables sleeping, and restarts on failure up to the configured retry limit. This documents the deployment setup; it does not mean a Railway deployment has been performed or verified.
+
+For chat persistence, mount a writable volume at `/app/data` and set `CHAT_DATABASE_PATH=/app/data/chat.sqlite3`. Stop the PC copy before starting Railway. To migrate history, stop both copies and transfer `data/chat.sqlite3` securely onto the volume; treat it as private chat data. Without a volume, redeployments can erase saved conversations.
 
 Do not run a PC-hosted copy and a Railway copy at the same time with the same Discord token. Run one active instance to avoid duplicate responses and conflicting session state.
 
@@ -96,13 +110,15 @@ Set `DEFAULT_PROVIDER` and optionally `DEFAULT_MODEL`; `/provider` can also chan
 | Anthropic | `ANTHROPIC_API_KEY`, optional `CLAUDE_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
 | xAI | `XAI_API_KEY`, optional `GROK_MODEL` | Disabled unless `ALLOW_PAID_PROVIDERS=true`. |
 
-The default fallback order is `gemini,groq,openrouter,ollama`. Only providers with configured credentials/models are available. `MAX_PROVIDER_ATTEMPTS` allows 1–3 total provider attempts (including the selected provider); each attempt is capped at 20 seconds, within the 60-second default overall request timeout. `ENABLE_PROVIDER_FALLBACK=false` turns fallback off. The bot retries rate limits, timeouts, network errors, and server errors; authentication, safety, and other non-retryable failures stop the request. A retryable failure puts that provider on a fixed 30-second cooldown. Image requests only go to configured providers that advertise vision support; Groq and the default OpenRouter free router are text-only, and Ollama vision is opt-in.
+The default fallback order is `gemini,groq,openrouter,ollama`. Only providers with configured credentials/models are available. `MAX_PROVIDER_ATTEMPTS` allows 1–3 total provider attempts (including the selected provider); ordinary attempts are capped at 20 seconds and OpenAI search attempts at 45 seconds, within the 60-second default overall request timeout. `ENABLE_PROVIDER_FALLBACK=false` turns fallback off. The bot retries rate limits, timeouts, network errors, and server errors; authentication, safety, and other non-retryable failures stop the request. A retryable failure puts that provider on a fixed 30-second cooldown. Image requests only go to configured providers that advertise vision support; Groq and the default OpenRouter free router are text-only, and Ollama vision is opt-in. If a search-enabled request uses a provider without native search, the reply discloses that live web verification was unavailable.
 
 The bot cannot detect whether your Gemini or Groq account has paid billing enabled. Use provider accounts configured for free usage or disable paid billing there if you need that boundary. OpenRouter's default free router and free model IDs are restricted unless you opt into paid providers. `ALLOW_PAID_PROVIDERS` is a bot-side gate, not a provider billing cap.
 
 For Gemini's current model list, pricing, and limits, see Google's [models](https://ai.google.dev/gemini-api/docs/models), [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). Google says data from unpaid Gemini API services may be used to improve its products, so do not send sensitive information on that tier. Groq publishes its current [free-plan model rate limits](https://console.groq.com/docs/rate-limits) and [billing details](https://console.groq.com/docs/billing-faqs). OpenRouter lists [free models](https://openrouter.ai/collections/free-models/) and its [free-model usage limits](https://openrouter.ai/docs/faq#how-does-the-free-models-router-work). Availability, terms, quotas, and billing can change at those services.
 
 ### Web and image data
+
+OpenAI native search uses `ENABLE_OPENAI_WEB_SEARCH=true` and a supported Responses model, without a Tavily key. It is optional per answer, uses low search context, and is capped at one built-in tool call per answer. Tool calls and tokens are billable; output/cooldown limits are not a monthly spending cap. See [OpenAI web search](https://developers.openai.com/api/docs/guides/tools-web-search).
 
 Set `TAVILY_API_KEY` to use `/search`; web search is enabled automatically when a key is present, unless `ENABLE_WEB_SEARCH` overrides it. Tavily currently lists 1,000 free API credits per month; credits can run out, after which searches stop until reset or upgrade. See [Tavily pricing](https://www.tavily.com/pricing). Search queries are sent to Tavily. Search results, fetched page text, chat history, and image inputs are sent to the selected AI provider as needed to answer; check both providers' data terms and avoid sensitive content.
 

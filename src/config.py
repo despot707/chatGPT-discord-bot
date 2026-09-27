@@ -69,6 +69,7 @@ class BotConfig:
     interaction_channel_ids: frozenset[int] = frozenset()
     automatic_context_count: int = 0
     enable_web_search: bool = False
+    enable_openai_web_search: bool = False
     enable_web_browsing: bool = True
     web_max_bytes: int = 1_000_000
     web_max_chars: int = 12_000
@@ -79,6 +80,8 @@ class BotConfig:
     history_chars: int = 24000
     max_sessions: int = 1000
     idle_ttl_seconds: int = 3600
+    chat_database_path: Optional[str] = None
+    chat_retention_days: int = 30
     max_concurrent_requests: int = 3
     cooldown_seconds: int = 5
     request_timeout_seconds: int = 60
@@ -104,7 +107,7 @@ class BotConfig:
                 "DEFAULT_PROVIDER must be gemini, groq, openrouter, openai, claude, grok, or ollama"
             )
         try:
-            automatic_context_count = _int(env, "AUTOMATIC_CONTEXT_COUNT", 0, minimum=0)
+            automatic_context_count = _int(env, "AUTOMATIC_CONTEXT_COUNT", 10, minimum=0)
             web_max_bytes = _int(env, "WEB_MAX_BYTES", 1_000_000)
             web_max_chars = _int(env, "WEB_MAX_CHARS", 12_000)
             if automatic_context_count > 20:
@@ -133,6 +136,7 @@ class BotConfig:
                     "ENABLE_WEB_SEARCH",
                     default=bool(env.get("TAVILY_API_KEY", "").strip()),
                 ),
+                enable_openai_web_search=_bool(env, "ENABLE_OPENAI_WEB_SEARCH"),
                 enable_web_browsing=_bool(env, "ENABLE_WEB_BROWSING", default=True),
                 web_max_bytes=web_max_bytes,
                 web_max_chars=web_max_chars,
@@ -143,6 +147,9 @@ class BotConfig:
                 history_chars=_int(env, "HISTORY_CHARS", 24000),
                 max_sessions=_int(env, "MAX_SESSIONS", 1000),
                 idle_ttl_seconds=_int(env, "IDLE_TTL_SECONDS", 3600),
+                chat_database_path=env.get("CHAT_DATABASE_PATH", "data/chat.sqlite3").strip()
+                or None,
+                chat_retention_days=_int(env, "CHAT_RETENTION_DAYS", 30),
                 max_concurrent_requests=_int(env, "MAX_CONCURRENT_REQUESTS", 3),
                 cooldown_seconds=_int(env, "COOLDOWN_SECONDS", 5, minimum=0),
                 request_timeout_seconds=_int(env, "REQUEST_TIMEOUT_SECONDS", 60),

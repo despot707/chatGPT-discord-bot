@@ -441,3 +441,150 @@ async def test_async_clients_can_be_closed():
     manager.get_provider().client.aio.aclose = AsyncMock()
     await manager.close()
     manager.get_provider().client.aio.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_native_web_search_renders_clickable_inline_citations():
+    provider = OpenAIProvider("placeholder-key")
+    original = "News [1] and more [2]."
+    annotations = [
+        SimpleNamespace(
+            type="url_citation",
+            start_index=5,
+            end_index=8,
+            title="First [news]",
+            url="https://example.com/a(b)",
+        ),
+        SimpleNamespace(
+            type="url_citation",
+            start_index=18,
+            end_index=21,
+            title="Second",
+            url="https://example.org/latest",
+        ),
+    ]
+    provider.client.responses.create = AsyncMock(
+        return_value=SimpleNamespace(
+            output_text=original,
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(type="output_text", text=original, annotations=annotations)
+                    ],
+                )
+            ],
+        )
+    )
+    text = await provider.chat_completion(
+        [{"role": "user", "content": "latest news"}], web_search=True
+    )
+    assert provider.client.responses.create.await_args.kwargs["tools"] == [
+        {"type": "web_search", "search_context_size": "low"}
+    ]
+    assert provider.client.responses.create.await_args.kwargs["max_tool_calls"] == 1
+    assert text == (
+        "News [First \\[news\\]](<https://example.com/a%28b%29>) and more "
+        "[Second](<https://example.org/latest>)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_bad_citation_offsets_preserve_source_and_unsafe_urls_are_ignored():
+    provider = OpenAIProvider("placeholder-key")
+    provider.client.responses.create = AsyncMock(
+        return_value=SimpleNamespace(
+            output_text="Answer",
+            output=[
+                SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="Answer",
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    start_index=100,
+                                    end_index=101,
+                                    title="Source",
+                                    url="https://example.org",
+                                ),
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    start_index=0,
+                                    end_index=6,
+                                    title="Unsafe",
+                                    url="javascript:alert(1)",
+                                ),
+                            ],
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+    text = await provider.chat_completion([{"role": "user", "content": "news"}], web_search=True)
+    assert text == "Answer\n\nSources: [Source](<https://example.org>)"
+
+
+@pytest.mark.asyncio
+async def test_native_web_citation_title_is_bounded_without_changing_source_url():
+    provider = OpenAIProvider("placeholder-key")
+    url = "https://example.com/" + "a" * 200
+    provider.client.responses.create = AsyncMock(
+        return_value=SimpleNamespace(
+            output_text="[1]",
+            output=[
+                SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="[1]",
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    start_index=0,
+                                    end_index=3,
+                                    title="a" * 5000,
+                                    url=url,
+                                )
+                            ],
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+    text = await provider.chat_completion([{"role": "user", "content": "news"}], web_search=True)
+    assert text == f"[{'a' * 117}...](<{url}>)"
+
+
+@pytest.mark.asyncio
+async def test_native_web_oversized_citation_has_notice_instead_of_broken_url():
+    provider = OpenAIProvider("placeholder-key")
+    provider.client.responses.create = AsyncMock(
+        return_value=SimpleNamespace(
+            output_text="Claim [1]",
+            output=[
+                SimpleNamespace(
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="Claim [1]",
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    start_index=6,
+                                    end_index=9,
+                                    title="Source",
+                                    url="https://example.com/" + "x" * 2000,
+                                )
+                            ],
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+    text = await provider.chat_completion([{"role": "user", "content": "news"}], web_search=True)
+    assert text == "Claim Source (citation URL too long to display)"

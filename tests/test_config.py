@@ -21,6 +21,10 @@ def test_defaults_and_message_content_are_safe():
     assert config.enable_message_content is False
     assert config.steam_api_key is None
     assert config.gaming_database_path == "data/gaming.sqlite3"
+    assert config.chat_database_path == "data/chat.sqlite3"
+    assert config.chat_retention_days == 30
+    assert config.automatic_context_count == 10
+    assert config.enable_openai_web_search is False
     assert (config.max_input_chars, config.max_output_tokens, config.max_sessions) == (
         2000,
         1024,
@@ -82,3 +86,19 @@ def test_openai_reasoning_effort_is_optional_and_validated_without_echoing_value
         BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "OPENAI_REASONING_EFFORT": invalid_value})
     assert "OPENAI_REASONING_EFFORT" in str(caught.value)
     assert invalid_value not in str(caught.value)
+
+
+def test_persistent_chat_and_native_search_configuration():
+    config = BotConfig.from_env(
+        {
+            "DISCORD_BOT_TOKEN": "test",
+            "CHAT_DATABASE_PATH": "",
+            "CHAT_RETENTION_DAYS": "7",
+            "ENABLE_OPENAI_WEB_SEARCH": "true",
+        }
+    )
+    assert config.chat_database_path is None
+    assert config.chat_retention_days == 7
+    assert config.enable_openai_web_search
+    with pytest.raises(ValueError, match="CHAT_RETENTION_DAYS"):
+        BotConfig.from_env({"DISCORD_BOT_TOKEN": "test", "CHAT_RETENTION_DAYS": "0"})

@@ -85,7 +85,7 @@ async def test_capacity_fails_fast_and_settings_cannot_change_mid_request():
     with pytest.raises(RuntimeError, match="busy|already"):
         await client.respond((1, 2, 4), "too many", private=False)
     with pytest.raises(RuntimeError, match="in progress"):
-        client.reset(scope)
+        client.reset(scope, channel=True)
     manager.provider.event.set()
     await task
 
@@ -138,6 +138,76 @@ async def test_cancelled_provider_call_releases_capacity_and_reset_is_scoped():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not client._capacity.locked()
-    assert not next(c for k, c in client.conversations.items() if k.user_id == 3).in_flight
+    assert not next(c for k, c in client.conversations.items() if not k.private).in_flight
     client.reset(first)
-    assert any(k.user_id == 4 for k in client.conversations)
+    assert "keep this" in str(next(iter(client.conversations.values())).messages)
+
+
+@pytest.mark.asyncio
+async def test_persistent_shared_history_survives_restart_and_private_history_isolated(tmp_path):
+    path = str(tmp_path / "chat.sqlite3")
+    config = BotConfig(discord_bot_token="token", cooldown_seconds=0, chat_database_path=path)
+    first = DiscordClient(config, FakeManager())
+    await first.respond((1, 2, 10), "hello", private=False, speaker_label="Alice")
+    await first.respond((1, 2, 10), "private secret", private=True)
+    await first.respond((1, 2, 12), "welcome", private=False, speaker_label="Bob")
+
+    restarted = DiscordClient(config, FakeManager())
+    await restarted.respond(
+        (1, 2, 13), "what did they say?", private=False, include_shared_history=True
+    )
+    messages = restarted.provider_manager.provider.calls[0][0]
+    prior = str(messages)
+    assert "Alice: hello" in prior
+    assert "Bob: welcome" in prior
+    assert "private secret" not in prior
+    await restarted.respond((1, 2, 10), "continue privately", private=True)
+    private_messages = restarted.provider_manager.provider.calls[1][0]
+    assert "private secret" in str(private_messages)
+    assert "Alice: hello" not in str(private_messages)
+
+
+@pytest.mark.asyncio
+async def test_shared_conversation_guard_covers_different_users(tmp_path):
+    manager = FakeManager()
+    manager.provider.event = asyncio.Event()
+    client = DiscordClient(
+        BotConfig(
+            discord_bot_token="token",
+            cooldown_seconds=0,
+            chat_database_path=str(tmp_path / "chat.sqlite3"),
+        ),
+        manager,
+    )
+    task = asyncio.create_task(
+        client.respond((1, 2, 10), "first", private=False, speaker_label="Alice")
+    )
+    await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="already being generated"):
+        await client.respond((1, 2, 11), "second", private=False, speaker_label="Bob")
+    manager.provider.event.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_reset_defaults_to_private_and_admin_channel_reset_clears_shared(tmp_path):
+    client = DiscordClient(
+        BotConfig(
+            discord_bot_token="token",
+            cooldown_seconds=0,
+            chat_database_path=str(tmp_path / "chat.sqlite3"),
+        ),
+        FakeManager(),
+    )
+    await client.respond((1, 2, 10), "private secret", private=True)
+    await client.respond((1, 2, 10), "shared note", private=False, speaker_label="Alice")
+    await client.respond((1, 2, 11), "another shared note", private=False, speaker_label="Bob")
+    store = client._get_chat_store()
+    assert store is not None
+
+    assert client.reset((1, 2, 10))
+    assert store.load((1, 2, 10), max_messages=20, max_chars=24000) == []
+    assert store.load((1, 2, 0), max_messages=20, max_chars=24000)
+
+    assert client.reset((1, 2, 10), channel=True)
+    assert store.load((1, 2, 0), max_messages=20, max_chars=24000) == []

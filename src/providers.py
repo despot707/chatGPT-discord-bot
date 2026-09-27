@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, Optional
+from urllib.parse import quote, urlsplit
 
 from anthropic import AsyncAnthropic
 from google import genai
@@ -49,6 +50,59 @@ class ImageInput:
 
     data: bytes
     mime_type: str
+
+
+def _web_citation_text(response: Any, fallback: str) -> str:
+    """Turn Responses URL annotations into clickable, inline Discord citations."""
+    rendered: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        for part in getattr(item, "content", None) or []:
+            if getattr(part, "type", "") != "output_text":
+                continue
+            text = getattr(part, "text", "")
+            replacements: dict[tuple[int, int], list[str]] = {}
+            extra: list[str] = []
+            for annotation in getattr(part, "annotations", None) or []:
+                if getattr(annotation, "type", "") != "url_citation":
+                    continue
+                url = getattr(annotation, "url", "")
+                try:
+                    parsed = urlsplit(url)
+                except ValueError:
+                    continue
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    continue
+                title = getattr(annotation, "title", "") or parsed.netloc
+                title = " ".join(title.split())
+                if len(title) > 120:
+                    title = title[:117] + "..."
+                for character in ("\\", "[", "]", "*", "_", "`"):
+                    title = title.replace(character, "\\" + character)
+                escaped_url = quote(url, safe=":/?#[]@!$&'*+,;=%-._~")
+                link = f"[{title}](<{escaped_url}>)"
+                if len(link) > 1900:
+                    link = f"{title} (citation URL too long to display)"
+                start = getattr(annotation, "start_index", None)
+                end = getattr(annotation, "end_index", None)
+                if (
+                    isinstance(start, int)
+                    and isinstance(end, int)
+                    and 0 <= start <= end <= len(text)
+                ):
+                    replacements.setdefault((start, end), []).append(link)
+                else:
+                    extra.append(link)
+            boundary = len(text)
+            for (start, end), links in sorted(replacements.items(), reverse=True):
+                if end > boundary:
+                    extra.extend(links)
+                    continue
+                text = text[:start] + " ".join(dict.fromkeys(links)) + text[end:]
+                boundary = start
+            if extra:
+                text += "\n\nSources: " + " · ".join(dict.fromkeys(extra))
+            rendered.append(text)
+    return "\n".join(rendered) if rendered else fallback
 
 
 def _compatible_messages(
@@ -351,6 +405,9 @@ class OpenAIProvider(BaseProvider):
             request["max_output_tokens"] = kwargs["max_tokens"]
         if self._reasoning_effort is not None:
             request["reasoning"] = {"effort": self._reasoning_effort}
+        if kwargs.get("web_search", False):
+            request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
+            request["max_tool_calls"] = 1
         for key in ("temperature", "top_p"):
             if kwargs.get(key) is not None:
                 request[key] = kwargs[key]
@@ -361,7 +418,7 @@ class OpenAIProvider(BaseProvider):
         )
         output = getattr(response, "output_text", None)
         if output:
-            return output
+            return _web_citation_text(response, output)
         output_items = getattr(response, "output", None) or []
         refused = any(
             getattr(item, "type", "") == "refusal"
@@ -827,6 +884,7 @@ class ProviderManager:
         provider_type: ProviderType | None = None,
         model: str | None = None,
         images: tuple[ImageInput, ...] = (),
+        web_search: bool = False,
         **kwargs: Any,
     ) -> CompletionResult:
         """Complete a chat request with bounded, eligible provider failover."""
@@ -886,20 +944,39 @@ class ProviderManager:
             if self._cooldown_until.get(candidate, 0.0) > time.monotonic():
                 continue
             attempted.append(candidate)
-            attempt_timeout = min(attempt_cap, remaining)
+            candidate_cap = 45.0 if web_search and candidate == ProviderType.OPENAI else attempt_cap
+            attempt_timeout = min(candidate_cap, remaining)
             request = dict(kwargs)
             request["images"] = images
             request["request_timeout"] = attempt_timeout
+            request_messages = messages
+            if web_search:
+                if candidate == ProviderType.OPENAI:
+                    request["web_search"] = True
+                else:
+                    request_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Live web search is unavailable for this response. Do not claim "
+                                "you searched or verified current information. Explain uncertainty "
+                                "about current facts and do not invent sources."
+                            ),
+                        },
+                        *messages,
+                    ]
             try:
                 text = await asyncio.wait_for(
                     provider.chat_completion(
-                        messages,
+                        request_messages,
                         model=chosen_model,
                         **request,
                     ),
                     timeout=attempt_timeout,
                 )
                 self._cooldown_until.pop(candidate, None)
+                if web_search and candidate != ProviderType.OPENAI:
+                    text = "Live web search is unavailable for this response.\n\n" + text
                 return CompletionResult(text, candidate, chosen_model, tuple(attempted))
             except asyncio.CancelledError:
                 raise

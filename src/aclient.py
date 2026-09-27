@@ -7,16 +7,19 @@ import io
 import logging
 import os
 import re
+import sqlite3
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable, Dict, Optional
 
 import discord
 from discord import app_commands
 
 from src import personas
+from src.chat_store import ChatStore
 from src.config import BotConfig
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.web import WebError, WebService, WebSource
@@ -36,6 +39,7 @@ class ConversationKey:
 class Conversation:
     messages: list[dict[str, str]] = field(default_factory=list)
     last_used: float = field(default_factory=time.monotonic)
+    last_used_wall: float = field(default_factory=time.time)
     in_flight: bool = False
 
 
@@ -106,6 +110,23 @@ class DiscordClient(discord.Client):
         self.replyall_enabled: set[int] = set()
         self._capacity = asyncio.Semaphore(config.max_concurrent_requests)
         self._registered = False
+        self._chat_store: ChatStore | None = None
+        self._chat_store_unavailable = False
+
+    def _get_chat_store(self) -> ChatStore | None:
+        if self._chat_store is None and not self._chat_store_unavailable:
+            path = getattr(self.config, "chat_database_path", None)
+            if path:
+                try:
+                    self._chat_store = ChatStore(
+                        path,
+                        getattr(self.config, "chat_retention_days", 30),
+                        self.config.max_sessions,
+                    )
+                except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                    self._chat_store_unavailable = True
+                    logger.warning("Persistent chat history is unavailable")
+        return self._chat_store
 
     async def setup_hook(self) -> None:
         if self._registered:
@@ -132,6 +153,9 @@ class DiscordClient(discord.Client):
                 result = service_close()
                 if asyncio.iscoroutine(result):
                     await result
+        chat_close = getattr(self._chat_store, "close", None)
+        if chat_close:
+            chat_close()
         await super().close()
 
     @asynccontextmanager
@@ -196,9 +220,12 @@ class DiscordClient(discord.Client):
     def _prune(self, now: Optional[float] = None) -> None:
         now = time.monotonic() if now is None else now
         ttl = self.config.idle_ttl_seconds
+        retention_seconds = max(1, getattr(self.config, "chat_retention_days", 30)) * 86400
         for conversation_key in list(self.conversations):
             conv = self.conversations[conversation_key]
-            if not conv.in_flight and now - conv.last_used > ttl:
+            if not conv.in_flight and (
+                now - conv.last_used > ttl or time.time() - conv.last_used_wall > retention_seconds
+            ):
                 del self.conversations[conversation_key]
         for settings_key, settings in list(self.settings.items()):
             if now - settings.last_used > ttl:
@@ -218,7 +245,27 @@ class DiscordClient(discord.Client):
                 del self.conversations[evict]
             conv = Conversation()
             self.conversations[key] = conv
+        store = self._get_chat_store()
+        if store is not None and self.config.history_messages >= 2:
+            try:
+                conv.messages = store.load(
+                    (key.guild_id, key.channel_id, key.user_id),
+                    max_messages=self.config.history_messages,
+                    max_chars=self.config.history_chars,
+                )
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                self._chat_store_unavailable = True
+                self._chat_store = None
+                logger.warning("Persistent chat history could not be loaded")
+        elif store is not None:
+            try:
+                store.prune()
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                self._chat_store_unavailable = True
+                self._chat_store = None
+                logger.warning("Persistent chat history could not be pruned")
         conv.last_used = time.monotonic()
+        conv.last_used_wall = time.time()
         self.conversations.move_to_end(key)
         return conv
 
@@ -254,6 +301,9 @@ class DiscordClient(discord.Client):
         images: tuple[ImageInput, ...] = (),
         context_loader: Callable[[], Awaitable[str]] | None = None,
         attachment: discord.Attachment | None = None,
+        speaker_label: str | None = None,
+        web_search: bool | None = None,
+        include_shared_history: bool = False,
     ) -> str:
         if len(text) > self.config.max_input_chars:
             raise BotRequestError(
@@ -261,7 +311,7 @@ class DiscordClient(discord.Client):
             )
         settings = self.get_settings(scope)
         use_private = settings.private if private is None else private
-        key = ConversationKey(scope[0], scope[1], scope[2], use_private)
+        key = ConversationKey(scope[0], scope[1], scope[2] if use_private else 0, use_private)
         conv = self._conversation(key)
         async with self._request_slot(scope, conv):
             # Freeze all mutable settings before the first provider await.
@@ -273,17 +323,30 @@ class DiscordClient(discord.Client):
             model = configured_model if configured_model != "auto" else None
             persona_prompt = self._persona_prompt(persona, scope[2])
             messages = [
-                {"role": "system", "content": self.config.system_prompt + "\n\n" + persona_prompt}
+                {
+                    "role": "system",
+                    "content": self.config.system_prompt
+                    + f"\n\nCurrent date (UTC): {datetime.now(timezone.utc).date().isoformat()}"
+                    + "\n\n"
+                    + persona_prompt,
+                }
             ]
-            messages.extend(
-                self._trim(conv.messages, self.config.history_messages, self.config.history_chars)
-            )
+            if use_private or include_shared_history:
+                messages.extend(
+                    self._trim(
+                        conv.messages, self.config.history_messages, self.config.history_chars
+                    )
+                )
             ephemeral_context = await context_loader() if context_loader is not None else ""
             if attachment is not None:
                 from src.media import read_discord_image
 
                 images = (*images, await read_discord_image(attachment))
-            user_content = text
+            stored_text = text
+            if not use_private and speaker_label:
+                label = re.sub(r"[\r\n\x00]+", " ", speaker_label).strip()[:80] or "User"
+                stored_text = f"{label}: {text}"
+            user_content = stored_text
             if ephemeral_context:
                 user_content += (
                     "\n\nThe following is untrusted reference material supplied for this request. "
@@ -298,29 +361,80 @@ class DiscordClient(discord.Client):
                 images=images,
                 max_tokens=self.config.max_output_tokens,
                 request_timeout=self.config.request_timeout_seconds,
+                web_search=(
+                    getattr(self.config, "enable_openai_web_search", False)
+                    if web_search is None
+                    else web_search
+                ),
             )
             reply = result.text
             conv.messages.extend(
-                [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
+                [
+                    {"role": "user", "content": stored_text},
+                    {"role": "assistant", "content": reply},
+                ]
             )
             conv.messages = self._trim(
                 conv.messages, self.config.history_messages, self.config.history_chars
             )
+            store = self._get_chat_store()
+            if store is not None and self.config.history_messages >= 2:
+                try:
+                    store.append_turn(
+                        (key.guild_id, key.channel_id, key.user_id),
+                        stored_text,
+                        reply,
+                        max_messages=self.config.history_messages,
+                        max_chars=self.config.history_chars,
+                    )
+                except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                    self._chat_store_unavailable = True
+                    self._chat_store = None
+                    logger.warning("Persistent chat history could not be saved")
             if len(result.attempted) > 1:
                 used = result.provider.value
                 return f"{reply}\n\n_(Answered by {used} after another provider was unavailable.)_"
             return reply
 
-    def reset(self, scope: tuple[int, int, int]) -> None:
+    def reset(self, scope: tuple[int, int, int], *, channel: bool = False) -> bool:
         settings = self.get_settings(scope)
         for key, conv in self.conversations.items():
-            if (key.guild_id, key.channel_id, key.user_id) == scope and conv.in_flight:
+            matches = (key.guild_id, key.channel_id) == scope[:2] and (
+                (not channel and key.private and key.user_id == scope[2])
+                or (channel and not key.private)
+            )
+            if matches and conv.in_flight:
                 raise BotRequestError("A response is in progress; retry reset after it finishes.")
+        store = self._get_chat_store()
+        if store is not None:
+            try:
+                store.clear((scope[0], scope[1], 0 if channel else scope[2]))
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                self._chat_store_unavailable = True
+                self._chat_store = None
+                logger.warning("Persistent chat history could not be cleared")
+                raise BotRequestError(
+                    "Persistent chat storage is unavailable; history was not cleared."
+                ) from None
         for key in [
-            k for k in self.conversations if (k.guild_id, k.channel_id, k.user_id) == scope
+            k
+            for k in self.conversations
+            if (k.guild_id, k.channel_id) == scope[:2]
+            and (
+                (not channel and k.private and k.user_id == scope[2]) or (channel and not k.private)
+            )
         ]:
             del self.conversations[key]
         settings.persona = "standard"
+        return store is not None
+
+    def _has_in_flight(self, scope: tuple[int, int, int]) -> bool:
+        return any(
+            conv.in_flight
+            and (key.guild_id, key.channel_id) == scope[:2]
+            and (key.user_id == scope[2] if key.private else key.user_id == 0)
+            for key, conv in self.conversations.items()
+        )
 
     def _persona_prompt(self, persona: str, user_id: int) -> str:
         if persona not in personas.PERSONAS:
@@ -342,7 +456,11 @@ class DiscordClient(discord.Client):
                 f"Prompt is too long (maximum {self.config.max_input_chars} characters)."
             )
         settings = self.get_settings(scope)
-        conv = self._conversation(ConversationKey(*scope, settings.private))
+        conv = self._conversation(
+            ConversationKey(
+                scope[0], scope[1], scope[2] if settings.private else 0, settings.private
+            )
+        )
         async with self._request_slot(scope, conv):
             provider_type, configured_model = settings_snapshot or (
                 settings.provider,
@@ -416,16 +534,35 @@ class DiscordClient(discord.Client):
         async def image(interaction: discord.Interaction, url: str, caption: str = ""):
             await self._send_public_image(interaction, url, caption)
 
-        @self.tree.command(name="reset", description="Clear your conversation in this channel")
-        async def reset(interaction: discord.Interaction):
+        @self.tree.command(
+            name="reset",
+            description="Clear your private chat, or shared channel history as an admin",
+        )
+        async def reset(interaction: discord.Interaction, channel: bool = False):
             scope = self._scope(interaction)
-            try:
-                self.reset(scope)
+            if channel and not self.is_admin(interaction.user.id, interaction):
                 await interaction.response.send_message(
-                    "Conversation cleared.",
+                    "Manage Channels permission or bot-admin access is required to clear shared channel history.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+                return
+            try:
+                persistent = self.reset(scope, channel=channel)
+                await interaction.response.send_message(
+                    "Shared channel conversation cleared."
+                    if channel
+                    else "Your private conversation cleared.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                if not persistent:
+                    # This is an ephemeral follow-up because the in-memory state is still cleared.
+                    await interaction.followup.send(
+                        "Persistent chat storage is unavailable; older saved history may return after restart.",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
             except RuntimeError as exc:
                 await interaction.response.send_message(str(exc), ephemeral=True)
 
@@ -618,15 +755,24 @@ class DiscordClient(discord.Client):
                 if s.model != "auto"
                 else getattr(provider, "default_model", "provider default")
             )
+            persistence = (
+                "unavailable"
+                if self._chat_store_unavailable
+                else (
+                    f"on ({getattr(self.config, 'chat_retention_days', 30)} day retention)"
+                    if getattr(self.config, "chat_database_path", None)
+                    else "off"
+                )
+            )
             await interaction.response.send_message(
-                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}",
+                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}\nPersistent memory: {persistence}",
                 ephemeral=True,
             )
 
         @self.tree.command(name="help", description="Show bot commands")
         async def help_command(interaction: discord.Interaction):
             await interaction.response.send_message(
-                "Use /chat to talk (optionally attach an image, search the web, or request recent channel context), /search for sourced web results, /browse to summarize a public page, /image to send a public image URL, /draw for configured image generation, /reset to clear your conversation, /private to toggle private replies, /provider to choose an AI, /switchpersona to change persona, and /status to view settings. Use /steam link, /steam unlink, and /steam status for your own Steam profile; /party join, /party leave, /party show, and /party clear to manage the current channel party; /games together to compare linked libraries; and /teams make to split the party. Steam profile ownership is not verified. Reply-all and party clearing are administrator controlled.",
+                "Mention the bot for shared group chat; reply to a bot message to continue. /chat starts a private chat by default and can use an image, web search, or recent channel context. /search finds sourced web results; /browse summarizes one public page. /reset clears your private saved history; administrators can set channel:true to clear shared channel history. /private toggles private replies. Use /provider, /switchpersona, and /status for chat settings. /steam link, /steam unlink, /steam status, /party join, /party leave, /party show, /party clear, /games together, and /teams make manage gaming features. Steam profile ownership is not verified. Reply-all and party clearing are administrator controlled.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -635,12 +781,6 @@ class DiscordClient(discord.Client):
 
         register_gaming_commands(self)
         self._commands = {c.name: c for c in self.tree.get_commands()}
-
-    def _has_in_flight(self, scope: tuple[int, int, int]) -> bool:
-        return any(
-            c.in_flight and (k.guild_id, k.channel_id, k.user_id) == scope
-            for k, c in self.conversations.items()
-        )
 
     async def _chat_interaction(
         self,
@@ -690,9 +830,11 @@ class DiscordClient(discord.Client):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        if use_web and not self.config.enable_web_search:
+        if use_web and not (
+            self.config.enable_web_search or getattr(self.config, "enable_openai_web_search", False)
+        ):
             await interaction.response.send_message(
-                "Web search is disabled or has no search API key configured.",
+                "Web search is disabled by the bot administrator.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -718,7 +860,7 @@ class DiscordClient(discord.Client):
                             context_messages,
                         )
                     )
-                if use_web:
+                if use_web and self.config.enable_web_search:
                     source_list.extend(await self.web_service.search(message))
                     parts.append(self._format_sources(source_list))
                 return "\n\n".join(part for part in parts if part)
@@ -729,7 +871,21 @@ class DiscordClient(discord.Client):
                 private=private,
                 settings_snapshot=settings_snapshot,
                 attachment=image,
-                context_loader=load_request_context if context_messages or use_web else None,
+                context_loader=load_request_context
+                if context_messages or (use_web and self.config.enable_web_search)
+                else None,
+                speaker_label=(
+                    getattr(interaction.user, "display_name", None)
+                    or getattr(interaction.user, "name", None)
+                    or f"User {interaction.user.id}"
+                ),
+                web_search=bool(
+                    getattr(self.config, "enable_openai_web_search", False)
+                    and not (use_web and self.config.enable_web_search)
+                ),
+                include_shared_history=self._can_read_shared_history(
+                    interaction.channel, interaction.user
+                ),
             )
             if source_list:
                 reply += "\n\nSources:\n" + "\n".join(f"<{source.url}>" for source in source_list)
@@ -774,6 +930,13 @@ class DiscordClient(discord.Client):
             for perms in (user_permissions, bot_permissions)
             for name in ("view_channel", "read_message_history")
         )
+
+    @classmethod
+    def _can_read_shared_history(cls, channel, user) -> bool:
+        """DM history belongs to its user; guild history requires both sides to read it."""
+        if channel is None or getattr(channel, "guild", None) is None:
+            return True
+        return cls._can_read_channel(channel, user)
 
     async def _channel_context(self, channel, user, count: int, *, before=None) -> str:
         if not self.config.enable_message_content:
@@ -849,9 +1012,10 @@ class DiscordClient(discord.Client):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-        if kind == "search" and not self.config.enable_web_search:
+        native_search = bool(getattr(self.config, "enable_openai_web_search", False))
+        if kind == "search" and not self.config.enable_web_search and not native_search:
             await interaction.response.send_message(
-                "Web search is disabled or has no search API key configured.",
+                "Web search is disabled by the bot administrator.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -886,7 +1050,7 @@ class DiscordClient(discord.Client):
         async def load_source() -> str:
             if kind == "search":
                 sources.extend(await self.web_service.search(question))
-            else:
+            elif kind == "browse":
                 sources.append(await self.web_service.browse(url))
             return self._format_sources(sources)
 
@@ -896,7 +1060,18 @@ class DiscordClient(discord.Client):
                 question,
                 private=private,
                 settings_snapshot=snapshot,
-                context_loader=load_source,
+                context_loader=load_source
+                if kind == "browse" or (kind == "search" and self.config.enable_web_search)
+                else None,
+                web_search=kind == "search" and native_search and not self.config.enable_web_search,
+                speaker_label=(
+                    getattr(interaction.user, "display_name", None)
+                    or getattr(interaction.user, "name", None)
+                    or f"User {interaction.user.id}"
+                ),
+                include_shared_history=self._can_read_shared_history(
+                    interaction.channel, interaction.user
+                ),
             )
             if sources:
                 answer += "\n\nSources:\n" + "\n".join(f"<{source.url}>" for source in sources)
@@ -985,18 +1160,27 @@ class DiscordClient(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or message.webhook_id or not self.user:
             return
-        if not self.config.enable_message_content:
-            return
         channel_id = message.channel.id
         mentioned = self.user in getattr(message, "mentions", ())
         reference = getattr(message, "reference", None)
         resolved = getattr(reference, "resolved", None) if reference else None
+        reference_channel_id = getattr(resolved, "channel_id", None)
+        if reference_channel_id is None:
+            reference_channel_id = getattr(getattr(resolved, "channel", None), "id", None)
+        same_channel_reference = bool(resolved is not None and reference_channel_id == channel_id)
         replied_to_bot = bool(
-            resolved and getattr(getattr(resolved, "author", None), "id", None) == self.user.id
+            self.config.enable_message_content
+            and same_channel_reference
+            and getattr(getattr(resolved, "author", None), "id", None) == self.user.id
         )
-        configured_interaction = channel_id in self.config.interaction_channel_ids
+        configured_interaction = (
+            not self.config.interaction_channel_ids
+            or channel_id in self.config.interaction_channel_ids
+        )
         reply_all = (
-            channel_id in self.replyall_enabled and channel_id in self.config.replyall_channel_ids
+            self.config.enable_message_content
+            and channel_id in self.replyall_enabled
+            and channel_id in self.config.replyall_channel_ids
         )
         if not reply_all and not (configured_interaction and (mentioned or replied_to_bot)):
             return
@@ -1013,18 +1197,71 @@ class DiscordClient(discord.Client):
             ),
             None,
         )
+        reference_context = ""
+        if same_channel_reference and self._can_read_channel(message.channel, message.author):
+            reference_text = (getattr(resolved, "content", "") or "").strip()
+            if reference_text:
+                ref_author = getattr(resolved, "author", None)
+                ref_name = (
+                    getattr(ref_author, "display_name", None)
+                    or getattr(ref_author, "name", None)
+                    or "Referenced user"
+                )
+                reference_context = f"Referenced message from {ref_name}: {reference_text[:4000]}"
+            if image_attachment is None:
+                image_attachment = next(
+                    (
+                        item
+                        for item in getattr(resolved, "attachments", ())
+                        if str(getattr(item, "content_type", "")).lower().startswith("image/")
+                    ),
+                    None,
+                )
         if not content and image_attachment is not None:
             content = "Please describe this image."
-        if not content or len(content) > self.config.max_input_chars:
+        elif not content and reference_context:
+            content = "Please respond to the referenced message."
+        if len(content) > self.config.max_input_chars:
+            await message.channel.send(
+                f"That message is too long (maximum {self.config.max_input_chars} characters).",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
-        context_count = min(self.config.automatic_context_count, 20)
+        if not content:
+            return
+        context_count = (
+            min(self.config.automatic_context_count, 20)
+            if self.config.enable_message_content
+            else 0
+        )
         if context_count and not self._can_read_channel(message.channel, message.author):
-            return
+            context_count = 0
 
         async def load_context() -> str:
-            return await self._channel_context(
-                message.channel, message.author, context_count, before=message
-            )
+            parts: list[str] = []
+            if reference_context:
+                parts.append(reference_context)
+            if context_count:
+                try:
+                    parts.append(
+                        await self._channel_context(
+                            message.channel, message.author, context_count, before=message
+                        )
+                    )
+                except BotRequestError:
+                    parts.append("Recent channel context is unavailable for this request.")
+            urls = re.findall(r"https?://[^\s<>\"]+", content)
+            if self.config.enable_web_browsing and urls:
+                url = urls[0].rstrip(".,!?;:)")
+                if len(url) <= 1600:
+                    try:
+                        source = await self.web_service.browse(url)
+                    except WebError:
+                        parts.append("The linked page could not be loaded for this request.")
+                    else:
+                        parts.append(self._format_sources([source]))
+                        parts.append(f"Source URL: {source.url}")
+            return "\n\n".join(part for part in parts if part)[: self.config.web_max_chars]
 
         # Public-message context is always its own non-private conversation key.
         try:
@@ -1037,7 +1274,17 @@ class DiscordClient(discord.Client):
                     private=False,
                     settings_snapshot=settings_snapshot,
                     attachment=image_attachment,
-                    context_loader=load_context if context_count else None,
+                    context_loader=load_context
+                    if context_count or reference_context or self.config.enable_web_browsing
+                    else None,
+                    speaker_label=(
+                        getattr(message.author, "display_name", None)
+                        or getattr(message.author, "name", None)
+                        or f"User {message.author.id}"
+                    ),
+                    include_shared_history=self._can_read_shared_history(
+                        message.channel, message.author
+                    ),
                 )
             from utils.message_utils import send_split_message
 
