@@ -39,7 +39,7 @@ class ProviderType(Enum):
 
 
 class ProviderError(RuntimeError):
-    """Safe, user-facing provider failure with no upstream details or secrets."""
+    """Sanitized provider diagnostic; Discord renders a generic public message."""
 
     def __init__(self, message: str, *, retryable: bool = False):
         super().__init__(message)

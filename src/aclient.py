@@ -19,11 +19,36 @@ import discord
 from discord import app_commands
 
 from src import personas
+from src.budget import BudgetError
 from src.chat_store import ChatStore
 from src.config import BotConfig
 from src.message_context import serialize_message
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.web import WebError, WebService, WebSource
+
+PUBLIC_FAILURE = "I can't do that right now."
+_BUDGET_ERROR_TERMS = (
+    "budget",
+    "spend",
+    "quota",
+    "cost",
+    "price",
+    "paid",
+    "allowance",
+    "billing",
+    "charge",
+)
+
+
+def public_error_message(error: BaseException) -> str:
+    """Render a normal request failure without exposing provider or budget details."""
+    if isinstance(error, (ProviderError, BudgetError)):
+        return PUBLIC_FAILURE
+    message = str(error)
+    if any(term in message.casefold() for term in _BUDGET_ERROR_TERMS):
+        return PUBLIC_FAILURE
+    return message
+
 
 logger = logging.getLogger(__name__)
 
@@ -496,8 +521,8 @@ class DiscordClient(discord.Client):
             original = (
                 error.original if isinstance(error, app_commands.CommandInvokeError) else error
             )
-            if isinstance(original, (BotRequestError, ProviderError, WebError)):
-                message = str(original)
+            if isinstance(original, (BotRequestError, ProviderError, WebError, BudgetError)):
+                message = public_error_message(original)
             else:
                 message = "That command could not be completed. Please try again later."
             if interaction.response.is_done():
@@ -571,7 +596,7 @@ class DiscordClient(discord.Client):
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
             except RuntimeError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                await interaction.response.send_message(public_error_message(exc), ephemeral=True)
 
         @self.tree.command(name="private", description="Toggle private replies for your chats")
         async def private(interaction: discord.Interaction):
@@ -698,9 +723,7 @@ class DiscordClient(discord.Client):
         @self.tree.command(name="draw", description="Generate an image from a prompt")
         async def draw(interaction: discord.Interaction, prompt: str):
             if not self.config.enable_image_generation:
-                await interaction.response.send_message(
-                    "Image generation is disabled by the bot administrator.", ephemeral=True
-                )
+                await interaction.response.send_message(PUBLIC_FAILURE, ephemeral=True)
                 return
             prompt = prompt.replace("\x00", "").strip()
             if not prompt:
@@ -712,7 +735,7 @@ class DiscordClient(discord.Client):
             try:
                 settings = self.get_settings(scope)
             except BotRequestError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                await interaction.response.send_message(public_error_message(exc), ephemeral=True)
                 return
             visibility = settings.private
             settings_snapshot = (settings.provider, settings.model)
@@ -738,17 +761,21 @@ class DiscordClient(discord.Client):
                         ephemeral=visibility,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-            except ProviderError as exc:
+            except (ProviderError, BudgetError) as exc:
                 await interaction.followup.send(
-                    str(exc), ephemeral=visibility, allowed_mentions=discord.AllowedMentions.none()
+                    public_error_message(exc),
+                    ephemeral=visibility,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except BotRequestError as exc:
                 await interaction.followup.send(
-                    str(exc), ephemeral=visibility, allowed_mentions=discord.AllowedMentions.none()
+                    public_error_message(exc),
+                    ephemeral=visibility,
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except Exception:
                 await interaction.followup.send(
-                    "Image generation failed. Please check provider configuration and try again.",
+                    PUBLIC_FAILURE,
                     ephemeral=visibility,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -756,9 +783,15 @@ class DiscordClient(discord.Client):
         @self.tree.command(
             name="budget", description="Show the shared daily and monthly API limits"
         )
+        @app_commands.default_permissions(administrator=True)
         async def budget_status(interaction: discord.Interaction):
-            from src.budget import BudgetError
             from src.budget_view import format_budget
+
+            if not self.is_admin(interaction.user.id, interaction):
+                await interaction.response.send_message(
+                    PUBLIC_FAILURE, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+                )
+                return
 
             ledger = getattr(self.provider_manager, "budget", None)
             if ledger is None:
@@ -791,7 +824,7 @@ class DiscordClient(discord.Client):
                 )
             )
             await interaction.response.send_message(
-                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}\nPersistent memory: {persistence}\nUse /budget for shared spending limits.",
+                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}\nPersistent memory: {persistence}",
                 ephemeral=True,
             )
 
@@ -837,7 +870,9 @@ class DiscordClient(discord.Client):
             settings = self.get_settings(scope)
         except BotRequestError as exc:
             await interaction.response.send_message(
-                str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         private = settings.private
@@ -921,15 +956,21 @@ class DiscordClient(discord.Client):
             await send_split_message(reply, interaction, ephemeral=private)
         except BotRequestError as exc:
             await interaction.followup.send(
-                str(exc), ephemeral=private, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=private,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
-        except ProviderError as exc:
+        except (ProviderError, BudgetError) as exc:
             await interaction.followup.send(
-                str(exc), ephemeral=private, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=private,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except (WebError, ValueError) as exc:
             await interaction.followup.send(
-                str(exc), ephemeral=private, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=private,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception as exc:
             logger.warning("Chat request failed (%s)", type(exc).__name__)
@@ -1066,7 +1107,9 @@ class DiscordClient(discord.Client):
             settings = self.get_settings(scope)
         except BotRequestError as exc:
             await interaction.response.send_message(
-                str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         private = settings.private
@@ -1106,9 +1149,11 @@ class DiscordClient(discord.Client):
             from utils.message_utils import send_split_message
 
             await send_split_message(answer, interaction, ephemeral=private)
-        except (BotRequestError, ProviderError, WebError, ValueError) as exc:
+        except (BotRequestError, ProviderError, WebError, ValueError, BudgetError) as exc:
             await interaction.followup.send(
-                str(exc), ephemeral=private, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=private,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception:
             await interaction.followup.send(
@@ -1163,9 +1208,11 @@ class DiscordClient(discord.Client):
                 ephemeral=private,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-        except (BotRequestError, WebError) as exc:
+        except (BotRequestError, WebError, BudgetError) as exc:
             await interaction.followup.send(
-                str(exc), ephemeral=private, allowed_mentions=discord.AllowedMentions.none()
+                public_error_message(exc),
+                ephemeral=private,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception:
             await interaction.followup.send(
@@ -1384,12 +1431,18 @@ class DiscordClient(discord.Client):
             from utils.message_utils import send_split_message
 
             await send_split_message(reply, message, ephemeral=False)
-        except ProviderError as exc:
-            await message.channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+        except (ProviderError, BudgetError) as exc:
+            await message.channel.send(
+                public_error_message(exc), allowed_mentions=discord.AllowedMentions.none()
+            )
         except BotRequestError as exc:
-            await message.channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            await message.channel.send(
+                public_error_message(exc), allowed_mentions=discord.AllowedMentions.none()
+            )
         except (WebError, ValueError) as exc:
-            await message.channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            await message.channel.send(
+                public_error_message(exc), allowed_mentions=discord.AllowedMentions.none()
+            )
         except Exception:
             await message.channel.send(
                 "I couldn't complete that request. Please try again later.",

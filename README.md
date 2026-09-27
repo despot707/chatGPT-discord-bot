@@ -154,6 +154,18 @@ not enable that feature in the bot. Existing-image posting and public-page
 fetching do not themselves call a paid AI model; summarizing a page uses the
 metered Luna path.
 
+Reasoning is not a separate free allowance: any reported reasoning tokens are
+included in the API's total output-token usage, which is charged to Luna's $7
+pool. The 500-token cap covers reasoning and visible output together. Strict
+mode currently forces `reasoning.effort=none`, even if a different effort is
+configured, to preserve ordinary chat capacity. See OpenAI's
+[reasoning cost controls](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs).
+
+Provider and budget failures in normal Discord replies say "I can't do that
+right now." without exposing spending, quota, or provider configuration details.
+`/budget` is an explicitly
+requested private administrator report; it is not advertised by `/status`.
+
 Before activation, record the project's existing calendar-month API spend in
 `BUDGET_OPENING_MONTH_SPEND_USD`. A blank value means unknown and blocks paid
 generation during the first month until supplied. Do not enter zero unless it

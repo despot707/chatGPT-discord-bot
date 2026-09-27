@@ -136,8 +136,56 @@ async def test_budget_command_is_private_and_never_calls_ai():
     )
     client = DiscordClient(BotConfig(discord_bot_token="test"), provider_manager=manager)
     client._register_commands()
-    target = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        permissions=SimpleNamespace(manage_channels=True),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
     await client._commands["budget"].callback(target)
     manager.complete.assert_not_called()
     assert target.response.send_message.call_args.kwargs["ephemeral"] is True
     assert "$10.0000" in target.response.send_message.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_budget_command_denies_nonadmin_without_reading_ledger():
+    ledger = SimpleNamespace(snapshot=AsyncMock(side_effect=AssertionError("ledger read")))
+    client = DiscordClient(
+        BotConfig(discord_bot_token="test"),
+        provider_manager=SimpleNamespace(budget=ledger),
+    )
+    client._register_commands()
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        permissions=SimpleNamespace(manage_channels=False),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    await client._commands["budget"].callback(target)
+
+    ledger.snapshot.assert_not_awaited()
+    assert target.response.send_message.await_args.kwargs["ephemeral"] is True
+    assert target.response.send_message.await_args.args[0] == "I can't do that right now."
+    command = client._commands["budget"]
+    assert command.default_permissions.administrator is True
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_promote_budget_report():
+    manager = SimpleNamespace(
+        get_provider=lambda provider: SimpleNamespace(default_model="test-model")
+    )
+    client = DiscordClient(BotConfig(discord_bot_token="test"), provider_manager=manager)
+    client._register_commands()
+    target = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        channel=SimpleNamespace(id=2),
+        user=SimpleNamespace(id=3),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    await client._commands["status"].callback(target)
+
+    message = target.response.send_message.await_args.args[0]
+    assert "budget" not in message.lower()
+    assert "spend" not in message.lower()
