@@ -165,6 +165,7 @@ class WebService:
         max_bytes: int = 1_000_000,
         max_chars: int = 12_000,
         max_image_bytes: int = 5_000_000,
+        allow_paid_search: bool = True,
         _session_factory: Callable[..., Any] | None = None,
     ) -> None:
         if timeout_seconds <= 0 or max_bytes < 1 or max_chars < 1 or max_image_bytes < 1:
@@ -174,10 +175,13 @@ class WebService:
         self.max_bytes = max_bytes
         self.max_chars = max_chars
         self.max_image_bytes = max_image_bytes
+        self.allow_paid_search = allow_paid_search
         self._session_factory = _session_factory or aiohttp.ClientSession
 
     async def search(self, query: str) -> list[WebSource]:
         """Search Tavily and return up to five source snippets with provenance."""
+        if not self.allow_paid_search:
+            raise WebError("This search provider is disabled by the hard spending limit.")
         clean_query = " ".join(query.split())[:500]
         if not clean_query:
             raise WebError("Enter a search query first.")

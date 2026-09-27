@@ -32,6 +32,7 @@ BOT_ENV_PREFIXES = (
     "OPENROUTER_",
     "OLLAMA_",
     "TAVILY_",
+    "BUDGET_",
 )
 BOT_ENV_ALIASES = {
     "ADMIN_USER_IDS",
@@ -58,7 +59,18 @@ def load_explicit_environment(env_path: Path) -> None:
 def validate_environment(environ=None) -> BotConfig:
     env = os.environ if environ is None else environ
     config = BotConfig.from_env(env)
-    if config.default_provider in {"openai", "claude", "grok"} and not config.allow_paid_providers:
+    if config.hard_budget_enabled:
+        from src.providers import ProviderError, ProviderManager
+
+        try:
+            ProviderManager.budget_settings(env)
+        except ProviderError as exc:
+            raise ValueError(str(exc)) from None
+    if (
+        config.default_provider in {"openai", "claude", "grok"}
+        and not config.allow_paid_providers
+        and not config.hard_budget_enabled
+    ):
         raise ValueError(f"{config.default_provider} requires ALLOW_PAID_PROVIDERS=true")
     key_names = KEY_NAMES.get(config.default_provider, ())
     if key_names and not any(env.get(name, "").strip() for name in key_names):
@@ -106,6 +118,10 @@ def main(argv=None) -> int:
         return 2
     if args.check_config:
         print(f"Configuration OK (provider: {config.default_provider}).")
+        if config.hard_budget_enabled:
+            print(
+                "Hard API budget enabled; ledger readiness and remaining allowance are shown by /budget."
+            )
         return 0
     from src.bot import run_discord_bot
 

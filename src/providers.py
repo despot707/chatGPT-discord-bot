@@ -9,8 +9,9 @@ import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from enum import Enum
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, cast
 from urllib.parse import quote, urlsplit
 
 from anthropic import AsyncAnthropic
@@ -18,7 +19,8 @@ from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
 
-from src.config import _openai_reasoning_effort
+from src.budget import BudgetError, BudgetExceeded, BudgetLedger, BudgetPolicy
+from src.config import _bool, _openai_reasoning_effort
 
 logger = logging.getLogger(__name__)
 
@@ -361,10 +363,13 @@ class OpenAIProvider(BaseProvider):
         reasoning_effort: Optional[str] = None,
         base_url: Optional[str] = None,
         enable_image_generation: bool = False,
+        budget: Optional[BudgetLedger] = None,
     ):
         super().__init__(api_key, default_model=default_model)
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=60.0)
         self._image_generation_enabled = enable_image_generation
+        self._budget = budget
+        self._budget_contract_blocked = False
         self._reasoning_effort = _openai_reasoning_effort(
             {"OPENAI_REASONING_EFFORT": reasoning_effort or ""}
         )
@@ -372,6 +377,8 @@ class OpenAIProvider(BaseProvider):
     async def chat_completion(
         self, messages: list[dict[str, Any]], model: Optional[str] = None, **kwargs: Any
     ) -> str:
+        if self._budget is not None:
+            return await self._budgeted_chat_completion(messages, model=model, **kwargs)
         request_messages = [dict(message) for message in messages]
         images: tuple[ImageInput, ...] = tuple(kwargs.get("images", ()))
         if images:
@@ -434,9 +441,327 @@ class OpenAIProvider(BaseProvider):
             )
         raise ProviderError("OpenAI returned no text for this request.")
 
+    @staticmethod
+    def _budget_count(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ProviderError(
+                "OpenAI returned invalid token-count data; request blocked by budget controls."
+            )
+        return value
+
+    @staticmethod
+    def _budget_micros(tokens: int, rate_micros_per_token: Decimal) -> int:
+        return int(
+            (Decimal(tokens) * rate_micros_per_token).to_integral_value(rounding=ROUND_CEILING)
+        )
+
+    def _lock_budget(self, reason: str) -> None:
+        self._budget_contract_blocked = True
+        try:
+            budget = self._budget
+            if budget is not None:
+                budget.lock(reason)
+        except Exception:
+            logger.error("Strict budget ledger lock failed")
+
+    async def _budgeted_chat_completion(
+        self, messages: list[dict[str, Any]], *, model: Optional[str] = None, **kwargs: Any
+    ) -> str:
+        """Strict Luna-only Responses call guarded by preflight counts and ledger holds."""
+        budget = self._budget
+        if budget is None:
+            raise ProviderError("Strict budget mode is not configured; request blocked.")
+        chosen_model = model or self.default_model
+        if chosen_model != "gpt-6-luna" or self.default_model != "gpt-6-luna":
+            raise ProviderError("Strict budget mode only permits the gpt-6-luna model.")
+        if self._budget_contract_blocked:
+            raise ProviderError("The budget ledger is locked; paid requests are blocked.")
+        timeout = kwargs.get("request_timeout")
+        request_messages = [dict(message) for message in messages]
+        images: tuple[ImageInput, ...] = tuple(kwargs.get("images", ()))
+        if images:
+            last_user = next(
+                (
+                    index
+                    for index in range(len(request_messages) - 1, -1, -1)
+                    if request_messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if last_user is None:
+                raise ProviderError("Images need a user message to attach to.")
+            message = dict(request_messages[last_user])
+            text = str(message.get("content", ""))
+            message["content"] = [{"type": "input_text", "text": text}]
+            message["content"].extend(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:{image.mime_type};base64,{base64.b64encode(image.data).decode('ascii')}",
+                }
+                for image in images
+            )
+            request_messages[last_user] = message
+
+        wants_web = bool(kwargs.get("web_search", False))
+        require_web = bool(kwargs.get("require_web_search", False))
+        if require_web:
+            wants_web = True
+        web_requested = bool(kwargs.get("web_search", False) or require_web)
+        requested_output = kwargs.get("max_tokens")
+        if requested_output is None:
+            max_output = 500
+        elif (
+            isinstance(requested_output, bool)
+            or not isinstance(requested_output, int)
+            or requested_output <= 0
+        ):
+            raise ProviderError("max_tokens must be a positive integer in strict budget mode.")
+        else:
+            max_output = min(500, requested_output)
+        try:
+            state = cast(dict[str, Any], budget.snapshot())
+        except Exception:
+            raise ProviderError(
+                "The budget ledger is unavailable; paid requests are blocked."
+            ) from None
+        if state.get("blocked_reason") == "opening_month_spend_unknown" or not state.get(
+            "baseline_known"
+        ):
+            raise ProviderError(
+                "Opening month spend is unknown; configure BUDGET_OPENING_MONTH_SPEND_USD before paid requests."
+            )
+        if state.get("blocked_reason"):
+            raise ProviderError("The budget ledger is locked; paid requests are blocked.")
+        luna_state = state.get("luna", {})
+        precheck_rate = Decimal("0.75") if wants_web else Decimal("0.50")
+        minimum_output_hold = self._budget_micros(max_output, precheck_rate)
+        if int(luna_state.get("daily_remaining_micros", 0)) < minimum_output_hold:
+            raise ProviderError(
+                "The Luna daily budget is exhausted; check /budget for the reset time."
+            )
+        if int(luna_state.get("monthly_remaining_micros", 0)) < minimum_output_hold:
+            raise ProviderError("The Luna monthly allocation is exhausted; check /budget.")
+        extras_state = state.get("extras", {})
+        extras_remaining = min(
+            int(extras_state.get("monthly_remaining_micros", 0)),
+            int(extras_state.get("daily_remaining_micros", 0)),
+        )
+        web_unavailable = False
+        if wants_web and extras_remaining < 74_000:
+            if require_web:
+                extras_monthly = int(extras_state.get("monthly_remaining_micros", 0))
+                if int(extras_state.get("daily_remaining_micros", 0)) < 74_000:
+                    raise ProviderError(
+                        "The Extras daily budget is exhausted; check /budget for the reset time."
+                    )
+                if extras_monthly < 74_000:
+                    raise ProviderError(
+                        "The Extras monthly allocation is exhausted; check /budget."
+                    )
+                raise ProviderError(
+                    "The web-search reservation exceeds the remaining Extras budget."
+                )
+            wants_web = False
+            web_unavailable = True
+        if web_unavailable:
+            request_messages = [
+                {
+                    "role": "developer",
+                    "content": (
+                        "Live web search is unavailable for this response. Do not claim you searched "
+                        "or verified current information. Explain uncertainty about current facts "
+                        "and do not invent sources."
+                    ),
+                },
+                *request_messages,
+            ]
+        base_request: dict[str, Any] = {
+            "model": "gpt-6-luna",
+            "input": request_messages,
+            "reasoning": {"effort": "none"},
+        }
+        web_tool = [{"type": "web_search", "search_context_size": "low"}]
+        if wants_web:
+            base_request["tools"] = web_tool
+            base_request["max_tool_calls"] = 1
+            if require_web:
+                base_request["tool_choice"] = "required"
+        try:
+            count_response = await _bounded(
+                self.client.responses.input_tokens.count(
+                    **{
+                        key: value
+                        for key, value in base_request.items()
+                        if key in {"model", "input", "reasoning", "tools", "tool_choice"}
+                    }
+                ),
+                timeout,
+                "OpenAI token counting",
+            )
+            counted_input = self._budget_count(getattr(count_response, "input_tokens", None))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise ProviderError(
+                "OpenAI could not verify the input token count; request blocked by budget controls."
+            ) from None
+        if counted_input > 64_000:
+            raise ProviderError("This request exceeds the strict 64,000 input-token budget limit.")
+
+        luna_input_rate = Decimal("0.25") if wants_web else Decimal("0.125")
+        luna_output_rate = Decimal("0.75") if wants_web else Decimal("0.50")
+        luna_hold = self._budget_micros(counted_input, luna_input_rate) + self._budget_micros(
+            max_output, luna_output_rate
+        )
+        web_hold = self._budget_micros(2 * 128_000, Decimal("0.25")) + 10_000
+        used_web = wants_web
+        reservations: list[Any]
+        try:
+            holds = {"luna": luna_hold}
+            if wants_web:
+                holds["extras"] = web_hold
+            reservations = budget.reserve_many(holds)
+        except BudgetExceeded as budget_error:
+            if not wants_web or require_web:
+                raise ProviderError(str(budget_error)) from None
+            # Keep search optional for ordinary chat. Recount after changing the input and tools.
+            request_messages = [
+                {
+                    "role": "developer",
+                    "content": (
+                        "Live web search is unavailable for this response. Do not claim you searched "
+                        "or verified current information. Explain uncertainty about current facts "
+                        "and do not invent sources."
+                    ),
+                },
+                *request_messages,
+            ]
+            base_request = {
+                "model": "gpt-6-luna",
+                "input": request_messages,
+                "reasoning": {"effort": "none"},
+            }
+            try:
+                count_response = await _bounded(
+                    self.client.responses.input_tokens.count(**base_request),
+                    timeout,
+                    "OpenAI token counting",
+                )
+                counted_input = self._budget_count(getattr(count_response, "input_tokens", None))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise ProviderError(
+                    "OpenAI could not verify the input token count; request blocked by budget controls."
+                ) from None
+            if counted_input > 64_000:
+                raise ProviderError(
+                    "This request exceeds the strict 64,000 input-token budget limit."
+                )
+            luna_hold = self._budget_micros(counted_input, Decimal("0.125")) + self._budget_micros(
+                max_output, Decimal("0.50")
+            )
+            try:
+                reservations = budget.reserve_many({"luna": luna_hold})
+            except BudgetExceeded as budget_error:
+                raise ProviderError(str(budget_error)) from None
+            except BudgetError:
+                raise ProviderError(
+                    "The budget ledger is unavailable; paid requests are blocked."
+                ) from None
+            used_web = False
+        except BudgetError:
+            raise ProviderError(
+                "The budget ledger is unavailable; paid requests are blocked."
+            ) from None
+        except Exception:
+            raise ProviderError(
+                "The budget ledger could not be verified; paid requests are blocked."
+            ) from None
+
+        request: dict[str, Any] = {
+            "model": "gpt-6-luna",
+            "input": request_messages,
+            "store": False,
+            "max_output_tokens": max_output,
+            "reasoning": {"effort": "none"},
+            "service_tier": "default",
+            "max_tool_calls": 1,
+        }
+        if used_web:
+            request["tools"] = web_tool
+            if require_web:
+                request["tool_choice"] = "required"
+        if timeout is not None:
+            request["timeout"] = timeout
+        response = await _bounded(self.client.responses.create(**request), timeout, "OpenAI")
+        if getattr(response, "model", "gpt-6-luna") != "gpt-6-luna":
+            self._lock_budget("provider_contract_unknown_model")
+            raise ProviderError(
+                "OpenAI returned an unexpected model; budget usage could not be verified."
+            )
+        service_tier = getattr(response, "service_tier", None)
+        if service_tier not in (None, "default", "standard"):
+            self._lock_budget("provider_contract_unknown_service_tier")
+            raise ProviderError(
+                "OpenAI returned an unexpected service tier; budget usage could not be verified."
+            )
+        usage = getattr(response, "usage", None)
+        try:
+            actual_input = self._budget_count(getattr(usage, "input_tokens", None))
+            actual_output = self._budget_count(getattr(usage, "output_tokens", None))
+            if actual_output > max_output:
+                self._lock_budget("provider_contract_output_cap_exceeded")
+                raise ProviderError("OpenAI usage exceeded the strict output-token cap.")
+            output_items = getattr(response, "output", None) or []
+            web_calls = sum(getattr(item, "type", "") == "web_search_call" for item in output_items)
+            if web_calls > 1 or (web_calls and not used_web):
+                self._lock_budget("provider_contract_web_call_cap_exceeded")
+                raise ProviderError("OpenAI usage exceeded the strict web-search call cap.")
+            if actual_input > counted_input and not used_web:
+                self._lock_budget("provider_contract_unreserved_input_tokens")
+                raise ProviderError("OpenAI usage exceeded the verified input-token count.")
+            luna_input = min(actual_input, counted_input)
+            long_context = used_web and actual_input > 272_000
+            actual_input_rate = Decimal("0.25") if long_context else Decimal("0.125")
+            actual_output_rate = Decimal("0.75") if long_context else Decimal("0.50")
+            actual_luna = self._budget_micros(luna_input, actual_input_rate) + self._budget_micros(
+                actual_output, actual_output_rate
+            )
+            actual_extras = self._budget_micros(
+                max(0, actual_input - counted_input), actual_input_rate
+            )
+            if web_calls:
+                actual_extras += web_calls * 10_000
+            for reservation in reservations:
+                actual = actual_luna if reservation.bucket == "luna" else actual_extras
+                budget.settle(reservation.id, actual)
+        except ProviderError:
+            raise
+        except BudgetError as budget_error:
+            raise ProviderError(str(budget_error)) from None
+        except Exception:
+            # Keep all reservations when usage is missing or malformed.
+            raise ProviderError(
+                "OpenAI usage could not be verified; the budget reservation was retained."
+            ) from None
+        if require_web and not web_calls:
+            raise ProviderError("OpenAI did not perform the required web search.")
+        output = getattr(response, "output_text", None)
+        if not output:
+            raise ProviderError("OpenAI returned no text for this request.")
+        text = _web_citation_text(response, output) if used_web else output
+        if web_requested and not used_web:
+            text = "Live web search is unavailable for this response.\n\n" + text
+        elif web_requested and not web_calls:
+            text = "Live web search was not used for this response.\n\n" + text
+        return text
+
     async def generate_image(
         self, prompt: str, model: Optional[str] = None, **kwargs: Any
     ) -> str | bytes:
+        if self._budget is not None:
+            raise ProviderError("Image generation is disabled in strict budget mode.")
         if not self._image_generation_enabled:
             raise ProviderError(
                 "Image generation is disabled. Set ENABLE_IMAGE_GENERATION=true to enable it."
@@ -463,6 +788,12 @@ class OpenAIProvider(BaseProvider):
         raise ProviderError("OpenAI returned no usable image data.")
 
     def get_available_models(self) -> list[ModelInfo]:
+        if self._budget is not None:
+            return [
+                ModelInfo(
+                    "gpt-6-luna", ProviderType.OPENAI, "Budgeted chat model", supports_vision=True
+                )
+            ]
         return [
             ModelInfo(
                 self.default_model,
@@ -479,7 +810,7 @@ class OpenAIProvider(BaseProvider):
         ]
 
     def supports_image_generation(self) -> bool:
-        return self._image_generation_enabled
+        return self._budget is None and self._image_generation_enabled
 
 
 class ClaudeProvider(BaseProvider):
@@ -762,11 +1093,81 @@ class ProviderManager:
 
     def __init__(self, environ: Optional[Mapping[str, str]] = None):
         self.environ = dict(os.environ if environ is None else environ)
+        self.budget: Optional[BudgetLedger] = None
+        try:
+            self.strict_budget = _bool(self.environ, "HARD_BUDGET_ENABLED")
+        except ValueError:
+            raise ProviderError("HARD_BUDGET_ENABLED must be true or false.") from None
+        if self.strict_budget:
+            configured_provider = (self.environ.get("DEFAULT_PROVIDER") or "").strip().lower()
+            configured_model = (self.environ.get("OPENAI_MODEL") or "").strip()
+            if configured_provider and configured_provider != "openai":
+                raise ProviderError("Strict budget mode requires DEFAULT_PROVIDER=openai.")
+            if configured_model and configured_model != "gpt-6-luna":
+                raise ProviderError("Strict budget mode requires OPENAI_MODEL=gpt-6-luna.")
         self.openai_reasoning_effort = _openai_reasoning_effort(self.environ)
         self.providers: dict[ProviderType, BaseProvider] = {}
-        self.current_provider = self._parse_provider(self.environ.get("DEFAULT_PROVIDER", "gemini"))
+        self.current_provider = (
+            ProviderType.OPENAI
+            if self.strict_budget
+            else self._parse_provider(self.environ.get("DEFAULT_PROVIDER", "gemini"))
+        )
         self._cooldown_until: dict[ProviderType, float] = {}
+        if self.strict_budget:
+            self.budget = self._create_budget()
         self._initialize_providers()
+
+    @staticmethod
+    def _budget_usd_micros(
+        raw: Optional[str], name: str, default: Optional[str] = None
+    ) -> Optional[int]:
+        value = raw if raw not in (None, "") else default
+        if value is None:
+            return None
+        try:
+            amount = Decimal(value)
+        except (InvalidOperation, TypeError, ValueError):
+            raise ProviderError(f"{name} must be a finite non-negative dollar amount.") from None
+        if not amount.is_finite() or amount < 0:
+            raise ProviderError(f"{name} must be a finite non-negative dollar amount.")
+        return int((amount * Decimal(1_000_000)).to_integral_value(rounding=ROUND_CEILING))
+
+    @classmethod
+    def budget_settings(cls, environ: Mapping[str, str]) -> tuple[BudgetPolicy, str, Optional[int]]:
+        """Parse and validate strict budget settings without opening the ledger."""
+        monthly = cls._budget_usd_micros(
+            environ.get("BUDGET_MONTHLY_USD"), "BUDGET_MONTHLY_USD", "10"
+        )
+        luna = cls._budget_usd_micros(environ.get("BUDGET_LUNA_USD"), "BUDGET_LUNA_USD", "7")
+        opening = cls._budget_usd_micros(
+            environ.get("BUDGET_OPENING_MONTH_SPEND_USD"), "BUDGET_OPENING_MONTH_SPEND_USD"
+        )
+        if monthly is None or monthly <= 0 or monthly > 10_000_000:
+            raise ProviderError("BUDGET_MONTHLY_USD must be greater than zero and at most $10.00.")
+        if luna is None or luna > monthly:
+            raise ProviderError(
+                "BUDGET_LUNA_USD must be non-negative and no greater than the monthly limit."
+            )
+        timezone = (environ.get("BUDGET_TIMEZONE") or "America/Los_Angeles").strip()
+        path = (environ.get("BUDGET_DATABASE_PATH") or "data/budget.sqlite3").strip()
+        if not timezone or not path:
+            raise ProviderError("Budget timezone and database path must not be empty.")
+        try:
+            policy = BudgetPolicy(monthly, luna, timezone)
+        except Exception:
+            raise ProviderError("BUDGET_TIMEZONE or budget limits are invalid.") from None
+        return policy, path, opening
+
+    def _create_budget(self) -> BudgetLedger:
+        policy, path, opening = self.budget_settings(self.environ)
+        try:
+            return BudgetLedger(policy, path, opening_month_spend_micros=opening)
+        except BudgetError as error:
+            raise ProviderError(str(error)) from None
+        except Exception:
+            raise ProviderError(
+                "The strict budget could not be initialized; paid provider use is blocked."
+            ) from None
 
     @staticmethod
     def _parse_provider(value: str | ProviderType) -> ProviderType:
@@ -784,6 +1185,19 @@ class ProviderManager:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _initialize_providers(self) -> None:
+        if self.strict_budget:
+            key = (
+                self.environ.get("OPENAI_API_KEY") or self.environ.get("OPENAI_KEY") or ""
+            ).strip()
+            if key:
+                self.providers[ProviderType.OPENAI] = OpenAIProvider(
+                    key,
+                    default_model="gpt-6-luna",
+                    reasoning_effort="none",
+                    base_url="https://api.openai.com/v1",
+                    budget=self.budget,
+                )
+            return
         paid_allowed = self._enabled(self.environ.get("ALLOW_PAID_PROVIDERS"))
         for provider_type, (env_name, legacy_name) in self._KEYS.items():
             if provider_type in self._PAID and not paid_allowed:
@@ -817,6 +1231,12 @@ class ProviderManager:
             )
 
     def _unavailable(self, provider_type: ProviderType) -> ProviderError:
+        if self.strict_budget and provider_type != ProviderType.OPENAI:
+            return ProviderError("Strict budget mode only permits OpenAI gpt-6-luna.")
+        if self.strict_budget and provider_type == ProviderType.OPENAI and not self.providers:
+            return ProviderError(
+                "OpenAI is not configured. Set OPENAI_API_KEY to enable budgeted chat."
+            )
         if provider_type == ProviderType.FREE:
             return ProviderError(
                 "The old unauthenticated FREE/g4f scraper was removed. Use Gemini with GEMINI_API_KEY (Google AI Studio has a free tier), or configure OLLAMA_MODEL for a local model."
@@ -1020,6 +1440,8 @@ class ProviderManager:
         return list(self.providers)
 
     def get_provider_models(self, provider_type: ProviderType) -> list[ModelInfo]:
+        if self.strict_budget and provider_type != ProviderType.OPENAI:
+            return []
         provider = self.providers.get(provider_type)
         return provider.get_available_models() if provider else []
 

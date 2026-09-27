@@ -62,6 +62,7 @@ class BotConfig:
     enable_message_content: bool = False
     enable_image_generation: bool = False
     allow_paid_providers: bool = False
+    hard_budget_enabled: bool = False
     allowed_guild_ids: frozenset[int] = frozenset()
     allowed_channel_ids: frozenset[int] = frozenset()
     bot_admin_ids: frozenset[int] = frozenset()
@@ -97,7 +98,9 @@ class BotConfig:
         token = env.get("DISCORD_BOT_TOKEN", "").strip() or None
         if require_discord_token and not token:
             raise ValueError("Missing required environment variable: DISCORD_BOT_TOKEN")
-        provider = env.get("DEFAULT_PROVIDER", "gemini").strip().lower() or "gemini"
+        hard_budget_enabled = _bool(env, "HARD_BUDGET_ENABLED")
+        default_provider = "openai" if hard_budget_enabled else "gemini"
+        provider = env.get("DEFAULT_PROVIDER", default_provider).strip().lower() or default_provider
         if provider == "free":
             raise ValueError(
                 "DEFAULT_PROVIDER=free is no longer supported; migrate to gemini, groq, openrouter, openai, claude, grok, or ollama"
@@ -106,6 +109,15 @@ class BotConfig:
             raise ValueError(
                 "DEFAULT_PROVIDER must be gemini, groq, openrouter, openai, claude, grok, or ollama"
             )
+        default_model = env.get("DEFAULT_MODEL", "auto").strip() or "auto"
+        if hard_budget_enabled:
+            if provider != "openai":
+                raise ValueError("Hard budget mode requires DEFAULT_PROVIDER=openai")
+            if default_model not in {"auto", "gpt-6-luna"}:
+                raise ValueError("Hard budget mode requires DEFAULT_MODEL=auto or gpt-6-luna")
+            openai_model = env.get("OPENAI_MODEL", "gpt-6-luna").strip() or "gpt-6-luna"
+            if openai_model != "gpt-6-luna":
+                raise ValueError("Hard budget mode requires OPENAI_MODEL=gpt-6-luna")
         try:
             automatic_context_count = _int(env, "AUTOMATIC_CONTEXT_COUNT", 10, minimum=0)
             web_max_bytes = _int(env, "WEB_MAX_BYTES", 1_000_000)
@@ -119,10 +131,11 @@ class BotConfig:
             return cls(
                 discord_bot_token=token,
                 default_provider=provider,
-                default_model=env.get("DEFAULT_MODEL", "auto").strip() or "auto",
+                default_model=default_model,
                 enable_message_content=_bool(env, "ENABLE_MESSAGE_CONTENT"),
                 enable_image_generation=_bool(env, "ENABLE_IMAGE_GENERATION"),
                 allow_paid_providers=_bool(env, "ALLOW_PAID_PROVIDERS"),
+                hard_budget_enabled=hard_budget_enabled,
                 allowed_guild_ids=_ids(env, "ALLOWED_GUILD_IDS"),
                 allowed_channel_ids=_ids(env, "ALLOWED_CHANNEL_IDS"),
                 bot_admin_ids=_ids(env, "BOT_ADMIN_IDS")
@@ -131,7 +144,8 @@ class BotConfig:
                 replyall_channel_ids=_ids(env, "REPLYALL_CHANNEL_IDS"),
                 interaction_channel_ids=_ids(env, "INTERACTION_CHANNEL_IDS"),
                 automatic_context_count=automatic_context_count,
-                enable_web_search=_bool(
+                enable_web_search=not hard_budget_enabled
+                and _bool(
                     env,
                     "ENABLE_WEB_SEARCH",
                     default=bool(env.get("TAVILY_API_KEY", "").strip()),

@@ -99,6 +99,7 @@ class DiscordClient(discord.Client):
             api_key=os.environ.get("TAVILY_API_KEY"),
             max_bytes=config.web_max_bytes,
             max_chars=config.web_max_chars,
+            allow_paid_search=not config.hard_budget_enabled,
         )
         # Gaming services are constructed on first use, so ordinary bot clients
         # and tests do not create a database or initialize a Steam client.
@@ -305,6 +306,7 @@ class DiscordClient(discord.Client):
         attachment_loader: Callable[[], Awaitable[discord.Attachment | None]] | None = None,
         speaker_label: str | None = None,
         web_search: bool | None = None,
+        require_web_search: bool = False,
         include_shared_history: bool = False,
     ) -> str:
         if len(text) > self.config.max_input_chars:
@@ -370,6 +372,7 @@ class DiscordClient(discord.Client):
                     if web_search is None
                     else web_search
                 ),
+                require_web_search=require_web_search,
             )
             reply = result.text
             conv.messages.extend(
@@ -750,6 +753,25 @@ class DiscordClient(discord.Client):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
 
+        @self.tree.command(
+            name="budget", description="Show the shared daily and monthly API limits"
+        )
+        async def budget_status(interaction: discord.Interaction):
+            from src.budget import BudgetError
+            from src.budget_view import format_budget
+
+            ledger = getattr(self.provider_manager, "budget", None)
+            if ledger is None:
+                message = "The hard API spending limit is not enabled."
+            else:
+                try:
+                    message = format_budget(ledger.snapshot())
+                except BudgetError:
+                    message = "Budget storage is unavailable. Paid requests are blocked."
+            await interaction.response.send_message(
+                message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+            )
+
         @self.tree.command(name="status", description="Show your current bot settings")
         async def status(interaction: discord.Interaction):
             s = self.get_settings(self._scope(interaction))
@@ -769,7 +791,7 @@ class DiscordClient(discord.Client):
                 )
             )
             await interaction.response.send_message(
-                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}\nPersistent memory: {persistence}",
+                f"Provider: {s.provider.value}\nModel: {model}\nPersona: {s.persona}\nPrivate: {'on' if s.private else 'off'}\nPersistent memory: {persistence}\nUse /budget for shared spending limits.",
                 ephemeral=True,
             )
 
@@ -887,6 +909,7 @@ class DiscordClient(discord.Client):
                     getattr(self.config, "enable_openai_web_search", False)
                     and not (use_web and self.config.enable_web_search)
                 ),
+                require_web_search=use_web,
                 include_shared_history=self._can_read_shared_history(
                     interaction.channel, interaction.user
                 ),
@@ -1068,6 +1091,7 @@ class DiscordClient(discord.Client):
                 if kind == "browse" or (kind == "search" and self.config.enable_web_search)
                 else None,
                 web_search=kind == "search" and native_search and not self.config.enable_web_search,
+                require_web_search=kind == "search",
                 speaker_label=(
                     getattr(interaction.user, "display_name", None)
                     or getattr(interaction.user, "name", None)

@@ -120,6 +120,64 @@ The bot cannot detect whether your Gemini or Groq account has paid billing enabl
 
 For Gemini's current model list, pricing, and limits, see Google's [models](https://ai.google.dev/gemini-api/docs/models), [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). Google says data from unpaid Gemini API services may be used to improve its products, so do not send sensitive information on that tier. Groq publishes its current [free-plan model rate limits](https://console.groq.com/docs/rate-limits) and [billing details](https://console.groq.com/docs/billing-faqs). OpenRouter lists [free models](https://openrouter.ai/collections/free-models/) and its [free-model usage limits](https://openrouter.ai/docs/faq#how-does-the-free-models-router-work). Availability, terms, quotas, and billing can change at those services.
 
+### Strict API spending limit
+
+Set `HARD_BUDGET_ENABLED=true` for a shared, persistent admission limit across all
+Discord users, servers, slash commands, and mention replies. The default plan is
+`BUDGET_MONTHLY_USD=10` with `BUDGET_LUNA_USD=7` protected for GPT-6 Luna and the
+remaining $3 for extras. Amounts above $10 are rejected in this mode.
+
+Each pool gets its monthly allocation divided by the number of days in that
+calendar month, rounded down to a microdollar. In a 30-day month, that is about
+$0.233333/day for Luna and $0.10/day for extras; in a 31-day month it is about
+$0.225806 and $0.096774. Unused daily allowance does not carry forward. Daily
+limits reset at midnight in `BUDGET_TIMEZONE` (default `America/Los_Angeles`, with
+daylight-saving changes handled by the timezone database). Monthly spending is
+not erased by the daily reset. The monthly stop always takes precedence.
+
+The bot counts input tokens, including images and request structure, before
+generation and reserves enough for the input plus the maximum output. Native
+web search reserves a separate amount from extras, including its tool fee and
+a conservative allowance for returned context. A SQLite transaction makes these
+reservations atomic across concurrent requests sharing the same database.
+Verified usage can reduce a reservation. Timeouts, interrupted requests, missing
+usage, and uncertain results keep their full reservation; restarting does not
+restore it. This is intentionally more conservative than an invoice estimate.
+
+Ordinary chat can continue without live search after extras run out. Explicit
+search requests stop when they cannot reserve their maximum cost. Strict mode
+pins chat to GPT-6 Luna, Standard processing, no reasoning, and at most 500 output
+tokens. It blocks other providers, expensive model overrides, Tavily searches,
+and image generation. Voice is not implemented. These paths must have verified
+cost bounds before being enabled; allowing a model in the OpenAI dashboard does
+not enable that feature in the bot. Existing-image posting and public-page
+fetching do not themselves call a paid AI model; summarizing a page uses the
+metered Luna path.
+
+Before activation, record the project's existing calendar-month API spend in
+`BUDGET_OPENING_MONTH_SPEND_USD`. A blank value means unknown and blocks paid
+generation during the first month until supplied. Do not enter zero unless it
+has been verified. The baseline is imported once and cannot reset existing
+spend. It counts against the total ceiling; the Luna/extras split tracks spending
+after activation because the earlier category breakdown is unknown.
+`/budget` shows the shared limits, reservations, remaining allowances,
+and next resets without calling an AI model.
+
+Keep `BUDGET_DATABASE_PATH` on persistent storage. On Railway use a persistent
+volume, stop the PC bot first, and transfer the budget database along with chat
+data while both copies are stopped. Never run independent ledgers against one
+paid project. Do not delete this database to regain allowance. The app cannot
+cap charges from other programs, previously untracked requests, taxes, hosting,
+or future provider price changes. Use a dedicated OpenAI project/key and enable
+the project's $10 hard spending limit as an additional backstop. OpenAI notes
+that provider enforcement can lag slightly, so it complements the bot's
+pre-request checks rather than replacing them.
+
+References: [token counting](https://developers.openai.com/api/docs/guides/token-counting),
+[Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[search limits](https://developers.openai.com/api/docs/guides/tools-web-search#limitations),
+and [project hard limits](https://developers.openai.com/api/docs/guides/spend-limits).
+
 ### Web and image data
 
 OpenAI native search uses `ENABLE_OPENAI_WEB_SEARCH=true` and a supported Responses model, without a Tavily key. It is optional per answer, uses low search context, and is capped at one built-in tool call per answer. Tool calls and tokens are billable; output/cooldown limits are not a monthly spending cap. See [OpenAI web search](https://developers.openai.com/api/docs/guides/tools-web-search).
