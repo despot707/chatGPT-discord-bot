@@ -99,8 +99,9 @@ class DiscordClient(discord.Client):
         if self._registered:
             return
         self._register_commands()
-        await self.tree.sync()
+        commands = await self.tree.sync()
         self._registered = True
+        logger.info("Registered %d Discord application commands", len(commands))
 
     async def close(self) -> None:
         close = getattr(self.provider_manager, "close", None)
@@ -953,6 +954,11 @@ class DiscordClient(discord.Client):
         if self.user:
             await self.change_presence(
                 activity=discord.Activity(type=discord.ActivityType.listening, name="/chat | /help")
+            )
+            logger.info(
+                "Discord ready as bot ID %s in %d guilds",
+                self.user.id,
+                len(self.guilds),
             )
 
     async def on_message(self, message: discord.Message) -> None:

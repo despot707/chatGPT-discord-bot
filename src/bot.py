@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import logging
+
 from src.aclient import DiscordClient
 from src.config import BotConfig
 from src.providers import ProviderManager
 
+logger = logging.getLogger(__name__)
+
 
 def run_discord_bot(config: BotConfig | None = None, provider_manager=None) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     config = config or BotConfig.from_env()
     manager = provider_manager or ProviderManager()
     client = DiscordClient(config, provider_manager=manager)
     if not config.discord_bot_token:
         raise ValueError("Missing required environment variable: DISCORD_BOT_TOKEN")
+    logger.info("Starting Discord bot")
     client.run(config.discord_bot_token, log_handler=None)
