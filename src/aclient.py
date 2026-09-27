@@ -21,6 +21,7 @@ from discord import app_commands
 from src import personas
 from src.chat_store import ChatStore
 from src.config import BotConfig
+from src.message_context import serialize_message
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.web import WebError, WebService, WebSource
 
@@ -301,6 +302,7 @@ class DiscordClient(discord.Client):
         images: tuple[ImageInput, ...] = (),
         context_loader: Callable[[], Awaitable[str]] | None = None,
         attachment: discord.Attachment | None = None,
+        attachment_loader: Callable[[], Awaitable[discord.Attachment | None]] | None = None,
         speaker_label: str | None = None,
         web_search: bool | None = None,
         include_shared_history: bool = False,
@@ -338,6 +340,8 @@ class DiscordClient(discord.Client):
                     )
                 )
             ephemeral_context = await context_loader() if context_loader is not None else ""
+            if attachment is None and attachment_loader is not None:
+                attachment = await attachment_loader()
             if attachment is not None:
                 from src.media import read_discord_image
 
@@ -957,7 +961,7 @@ class DiscordClient(discord.Client):
             async for item in channel.history(limit=count, before=before, oldest_first=False):
                 if item.author.bot or getattr(item, "webhook_id", None):
                     continue
-                content = (item.content or "").strip()
+                content = serialize_message(item, max_chars=1200)
                 if not content:
                     continue
                 name = getattr(item.author, "display_name", None) or item.author.name
@@ -1164,10 +1168,16 @@ class DiscordClient(discord.Client):
         mentioned = self.user in getattr(message, "mentions", ())
         reference = getattr(message, "reference", None)
         resolved = getattr(reference, "resolved", None) if reference else None
-        reference_channel_id = getattr(resolved, "channel_id", None)
-        if reference_channel_id is None:
-            reference_channel_id = getattr(getattr(resolved, "channel", None), "id", None)
-        same_channel_reference = bool(resolved is not None and reference_channel_id == channel_id)
+        reference_id = getattr(reference, "message_id", None) if reference else None
+        reference_channel_id = getattr(reference, "channel_id", None) if reference else None
+        if reference_channel_id is None and resolved is not None:
+            reference_channel_id = getattr(resolved, "channel_id", None)
+            if reference_channel_id is None:
+                reference_channel_id = getattr(getattr(resolved, "channel", None), "id", None)
+        same_channel_reference = bool(
+            (resolved is not None and reference_channel_id == channel_id)
+            or (reference is not None and reference_channel_id == channel_id)
+        )
         replied_to_bot = bool(
             self.config.enable_message_content
             and same_channel_reference
@@ -1198,8 +1208,12 @@ class DiscordClient(discord.Client):
             None,
         )
         reference_context = ""
-        if same_channel_reference and self._can_read_channel(message.channel, message.author):
-            reference_text = (getattr(resolved, "content", "") or "").strip()
+        reference_image_attachment = None
+        reference_available = bool(
+            same_channel_reference and self._can_read_channel(message.channel, message.author)
+        )
+        if reference_available and resolved is not None:
+            reference_text = serialize_message(resolved)
             if reference_text:
                 ref_author = getattr(resolved, "author", None)
                 ref_name = (
@@ -1207,9 +1221,9 @@ class DiscordClient(discord.Client):
                     or getattr(ref_author, "name", None)
                     or "Referenced user"
                 )
-                reference_context = f"Referenced message from {ref_name}: {reference_text[:4000]}"
+                reference_context = f"Referenced message from {ref_name}: {reference_text}"
             if image_attachment is None:
-                image_attachment = next(
+                reference_image_attachment = next(
                     (
                         item
                         for item in getattr(resolved, "attachments", ())
@@ -1217,9 +1231,15 @@ class DiscordClient(discord.Client):
                     ),
                     None,
                 )
+        invocation_image_attachment = image_attachment
+        if reference_image_attachment is not None and invocation_image_attachment is None:
+            reference_context = (
+                reference_context
+                or "Referenced message contains an attached image supplied with this request."
+            )
         if not content and image_attachment is not None:
             content = "Please describe this image."
-        elif not content and reference_context:
+        elif not content and (reference_context or same_channel_reference):
             content = "Please respond to the referenced message."
         if len(content) > self.config.max_input_chars:
             await message.channel.send(
@@ -1239,8 +1259,49 @@ class DiscordClient(discord.Client):
 
         async def load_context() -> str:
             parts: list[str] = []
-            if reference_context:
-                parts.append(reference_context)
+            request_reference = reference_context
+            request_reference_image = reference_image_attachment
+            fetch_reference = getattr(message.channel, "fetch_message", None)
+            if reference_available and reference_id is not None and callable(fetch_reference):
+                # Fetch the exact reply target only after this message has passed
+                # gating and entered respond's existing request slot/deadline.
+                try:
+                    fresh = await fetch_reference(reference_id)
+                except (discord.Forbidden, discord.NotFound):
+                    fresh = None
+                    request_reference = "Referenced message content is unavailable."
+                    request_reference_image = None
+                except discord.HTTPException:
+                    fresh = None  # Keep resolved cached data as a fallback on transient errors.
+                if fresh is not None:
+                    serialized = serialize_message(fresh)
+                    request_reference_image = next(
+                        (
+                            item
+                            for item in getattr(fresh, "attachments", ())
+                            if str(getattr(item, "content_type", "")).lower().startswith("image/")
+                        ),
+                        None,
+                    )
+                    if serialized:
+                        author = getattr(fresh, "author", None)
+                        name = (
+                            getattr(author, "display_name", None)
+                            or getattr(author, "name", None)
+                            or "Referenced user"
+                        )
+                        request_reference = f"Referenced message from {name}: {serialized}"
+                    elif (
+                        request_reference_image is not None and invocation_image_attachment is None
+                    ):
+                        request_reference = "Referenced message contains an attached image supplied with this request."
+                    else:
+                        request_reference = "Referenced message content is unavailable."
+            if same_channel_reference and not request_reference:
+                request_reference = "Referenced message content is unavailable."
+            loaded_reference_image[0] = request_reference_image
+            if request_reference:
+                parts.append(request_reference)
             if context_count:
                 try:
                     parts.append(
@@ -1263,6 +1324,12 @@ class DiscordClient(discord.Client):
                         parts.append(f"Source URL: {source.url}")
             return "\n\n".join(part for part in parts if part)[: self.config.web_max_chars]
 
+        async def load_reference_attachment() -> discord.Attachment | None:
+            # load_context fills this inside respond's existing request slot.
+            return loaded_reference_image[0] or invocation_image_attachment
+
+        loaded_reference_image = [reference_image_attachment]
+
         # Public-message context is always its own non-private conversation key.
         try:
             settings = self.get_settings(scope)
@@ -1273,9 +1340,13 @@ class DiscordClient(discord.Client):
                     content,
                     private=False,
                     settings_snapshot=settings_snapshot,
-                    attachment=image_attachment,
+                    attachment=invocation_image_attachment,
+                    attachment_loader=load_reference_attachment if reference_available else None,
                     context_loader=load_context
-                    if context_count or reference_context or self.config.enable_web_browsing
+                    if context_count
+                    or reference_context
+                    or same_channel_reference
+                    or self.config.enable_web_browsing
                     else None,
                     speaker_label=(
                         getattr(message.author, "display_name", None)
