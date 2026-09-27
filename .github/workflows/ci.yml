@@ -69,3 +69,10 @@ jobs:
           -e DISCORD_BOT_TOKEN=test-discord-token
           -e GEMINI_API_KEY=test-gemini-key
           discord-bot:test python main.py --check-config
+      - name: Check gaming database permissions and persistence
+        run: |
+          printf 'DISCORD_BOT_TOKEN=test-discord-token\nGEMINI_API_KEY=test-gemini-key\n' > .env
+          docker tag discord-bot:test chatgpt-discord-bot:latest
+          docker compose config -q
+          docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.gaming import GamingStore, PartyPlayer; s=GamingStore('data/gaming.sqlite3'); s.join_party(1, 2, PartyPlayer(3, 'Container test')); s.close()"
+          docker compose run --rm --no-deps -T chatgpt-discord-bot python -c "from src.gaming import GamingStore; s=GamingStore('data/gaming.sqlite3'); assert s.party(1, 2)[0].user_id == 3; s.close()"

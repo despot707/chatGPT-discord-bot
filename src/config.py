@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
 OPENAI_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
@@ -83,6 +83,8 @@ class BotConfig:
     cooldown_seconds: int = 5
     request_timeout_seconds: int = 60
     system_prompt: str = "You are a helpful assistant."
+    steam_api_key: Optional[str] = field(default=None, repr=False)
+    gaming_database_path: str = "data/gaming.sqlite3"
 
     @classmethod
     def from_env(
@@ -145,6 +147,9 @@ class BotConfig:
                 cooldown_seconds=_int(env, "COOLDOWN_SECONDS", 5, minimum=0),
                 request_timeout_seconds=_int(env, "REQUEST_TIMEOUT_SECONDS", 60),
                 system_prompt=env.get("SYSTEM_PROMPT", "You are a helpful assistant."),
+                steam_api_key=env.get("STEAM_API_KEY", "").strip() or None,
+                gaming_database_path=env.get("GAMING_DATABASE_PATH", "").strip()
+                or "data/gaming.sqlite3",
             )
         except ValueError:
             raise

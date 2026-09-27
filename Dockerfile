@@ -7,7 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 botuser
+RUN useradd --create-home --uid 10001 botuser \
+    && mkdir -p /app/data \
+    && chown botuser:botuser /app/data
 
 COPY constraints.txt requirements.txt ./
 RUN python -m pip install --upgrade pip \

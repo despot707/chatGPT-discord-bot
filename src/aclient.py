@@ -75,7 +75,14 @@ class _BotCommandTree(app_commands.CommandTree):
 
 
 class DiscordClient(discord.Client):
-    def __init__(self, config: BotConfig, provider_manager=None, web_service=None) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        provider_manager=None,
+        web_service=None,
+        gaming_store=None,
+        steam_service=None,
+    ) -> None:
         intents = discord.Intents.default()
         intents.message_content = config.enable_message_content
         super().__init__(intents=intents)
@@ -88,6 +95,11 @@ class DiscordClient(discord.Client):
             max_bytes=config.web_max_bytes,
             max_chars=config.web_max_chars,
         )
+        # Gaming services are constructed on first use, so ordinary bot clients
+        # and tests do not create a database or initialize a Steam client.
+        self.gaming_store = gaming_store
+        self.steam_service = steam_service
+        self._steam_mutations: dict[tuple[int, int], list[int]] = {}
         self.conversations: OrderedDict[ConversationKey, Conversation] = OrderedDict()
         self.settings: Dict[tuple[int, int, int], UserChannelSettings] = {}
         self.cooldowns: Dict[tuple[int, int, int], float] = {}
@@ -114,6 +126,12 @@ class DiscordClient(discord.Client):
             result = web_close()
             if asyncio.iscoroutine(result):
                 await result
+        for service in (self.gaming_store, self.steam_service):
+            service_close = getattr(service, "close", None)
+            if service_close:
+                result = service_close()
+                if asyncio.iscoroutine(result):
+                    await result
         await super().close()
 
     @asynccontextmanager
@@ -608,11 +626,14 @@ class DiscordClient(discord.Client):
         @self.tree.command(name="help", description="Show bot commands")
         async def help_command(interaction: discord.Interaction):
             await interaction.response.send_message(
-                "Use /chat to talk (optionally attach an image, search the web, or request recent channel context), /search for sourced web results, /browse to summarize a public page, /image to send a public image URL, /draw for configured image generation, /reset to clear your conversation, /private to toggle private replies, /provider to choose an AI, /switchpersona to change persona, and /status to view settings. Reply-all is administrator controlled.",
+                "Use /chat to talk (optionally attach an image, search the web, or request recent channel context), /search for sourced web results, /browse to summarize a public page, /image to send a public image URL, /draw for configured image generation, /reset to clear your conversation, /private to toggle private replies, /provider to choose an AI, /switchpersona to change persona, and /status to view settings. Use /steam link, /steam unlink, and /steam status for your own Steam profile; /party join, /party leave, /party show, and /party clear to manage the current channel party; /games together to compare linked libraries; and /teams make to split the party. Steam profile ownership is not verified. Reply-all and party clearing are administrator controlled.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
+        from src.gaming_commands import register_gaming_commands
+
+        register_gaming_commands(self)
         self._commands = {c.name: c for c in self.tree.get_commands()}
 
     def _has_in_flight(self, scope: tuple[int, int, int]) -> bool:

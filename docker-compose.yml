@@ -9,6 +9,8 @@ services:
       - .env
     restart: unless-stopped
     read_only: true
+    volumes:
+      - gaming-data:/app/data
     tmpfs:
       - /tmp
     security_opt:
@@ -18,3 +20,6 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+volumes:
+  gaming-data:

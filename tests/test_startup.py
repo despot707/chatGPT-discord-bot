@@ -15,6 +15,8 @@ MAIN_SCRIPT = REPO_ROOT / "main.py"
 SECRET_VALUES = ("test-discord-token", "test-provider-key")
 BOT_ENV_KEYS = {
     "DISCORD_BOT_TOKEN",
+    "STEAM_API_KEY",
+    "GAMING_DATABASE_PATH",
     "GEMINI_API_KEY",
     "GEMINI_KEY",
     "OPENAI_API_KEY",
@@ -58,6 +60,17 @@ def run_check_config(
 
 def combined_output(result: subprocess.CompletedProcess[str]) -> str:
     return result.stdout + result.stderr
+
+
+def test_explicit_environment_does_not_inherit_steam_key_or_database(monkeypatch, tmp_path):
+    env_file = tmp_path / "gaming.env"
+    env_file.write_text("DISCORD_BOT_TOKEN=test\nGEMINI_API_KEY=test\n", encoding="utf-8")
+    monkeypatch.setenv("STEAM_API_KEY", "unrelated-steam-key")
+    monkeypatch.setenv("GAMING_DATABASE_PATH", "unrelated-database.sqlite3")
+    main_module.load_explicit_environment(env_file)
+    config = main_module.validate_environment()
+    assert config.steam_api_key is None
+    assert config.gaming_database_path == "data/gaming.sqlite3"
 
 
 def assert_no_secrets(output: str) -> None:

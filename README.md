@@ -13,6 +13,28 @@ A self-hosted Discord assistant with slash commands, bounded conversations, web 
 
 Conversation history and settings are held in memory, separated by user and Discord scope. A restart or idle expiry clears them. The bot does not provide general Discord control, member moderation, or self-bot behavior.
 
+## Pick a game and build teams
+
+Gaming commands run without AI calls. They work in server channels without Message Content Intent, and respect the same server/channel allowlists as chat.
+
+1. Each player runs `/party join` in the channel you are using. Optional `skill` (1–10) and `role` describe that player's rating and preference for this session. Joining again updates them. Use the same rating scale across your group; these are self-reported ratings, not game ranks or verified MMR.
+2. For Steam suggestions, each player runs `/steam link profile:<Steam profile URL or SteamID64>` once in that server. This saves a public profile reference you supply; it does not sign in to Steam or verify account ownership. Saving it allows the server's parties to compare that library. `/steam status` shows your saved reference privately; `/steam unlink` removes it.
+3. `/games together` compares the channel party's visible libraries and suggests shared games. `mode:all` requires everyone to have the game; `mode:most` also considers games owned by part of the group and shows ownership counts. Multiplayer filtering is on by default; use `multiplayer_only:false` to see shared titles without that filter.
+4. `/teams make` splits the party into 2–4 teams. Balanced mode uses the supplied ratings and spreads repeated role preferences where possible; `balanced:false` shuffles players. It does not fetch competitive ranks, enforce a game's role rules, move voice-channel members, or create in-game lobbies.
+5. `/party show` displays the roster; `/party leave` removes yourself. `/party clear` requires Manage Channels or a configured bot administrator.
+
+Parties contain at most 20 people and are separate for each server/channel. Steam profile references are separate for each server/user. Teams work without Steam, including for non-Steam games. Party and team results are visible in the channel, with mentions suppressed.
+
+The bot host needs one `STEAM_API_KEY`, stored only in `.env` or hosting secret variables. Obtain it from [Steam's Web API key page](https://steamcommunity.com/dev/apikey); individual players only supply a profile link, never their password or API key. Steam returns owned games only when game details are visible to the key's caller. Private, missing, or failed libraries stop the comparison instead of silently leaving that person out. Played free games can appear; this is not a complete catalog of free games everyone could install. See Valve's [owned-games API](https://partner.steamgames.com/doc/webapi/iplayerservice) and [key documentation](https://partner.steamgames.com/doc/webapi_overview/auth).
+
+Suggestions rank actual ownership coverage and recorded playtime. Store category metadata is fetched on a bounded, best-effort basis using Steam's undocumented store endpoint. Multiplayer filtering checks a limited set of top candidates and can miss a suitable title farther down the list. Unknown metadata is not proof of multiplayer support. Check a suggested game's online support and lobby size before choosing it: library ownership does not establish that your entire party can play together, that everyone has it installed, or that shared family licenses can be used simultaneously.
+
+### Save gaming data on your PC or Railway
+
+`GAMING_DATABASE_PATH` defaults to `data/gaming.sqlite3`. It stores Discord IDs, supplied Steam IDs/display names, and party names/ratings/roles. Libraries are cached temporarily in memory and are not sent to an AI provider. Keep the database private and back it up; it is excluded from Git and Docker build context. Members can remove their saved profile with `/steam unlink` and their current roster entry with `/party leave`.
+
+On your PC, keep the `data` folder between runs. Docker Compose creates a writable `gaming-data` volume at `/app/data`; ordinary `docker compose down` preserves it. On Railway, attach a persistent volume at `/app/data` and set `GAMING_DATABASE_PATH=/app/data/gaming.sqlite3`; without a volume, redeploying loses this data. The Docker image normally runs as UID 10001, so the mounted directory must be writable by that user. Railway mounts volumes as root and documents `RAILWAY_RUN_UID=0` as its compatibility setting (this runs the service as root). See [Railway volume permissions](https://docs.railway.com/volumes). Use one worker/replica with this SQLite database. No Railway volume or paid hosting plan is created automatically by these instructions.
+
 ## Requirements
 
 - Python 3.12 or 3.13 for Windows hosting

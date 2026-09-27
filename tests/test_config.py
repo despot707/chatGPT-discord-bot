@@ -2,10 +2,25 @@ import pytest
 from src.config import BotConfig
 
 
+def test_steam_key_is_optional_and_not_in_config_repr():
+    config = BotConfig.from_env(
+        {
+            "DISCORD_BOT_TOKEN": "test",
+            "STEAM_API_KEY": "example-private-key",
+            "GAMING_DATABASE_PATH": "custom/path.sqlite3",
+        }
+    )
+    assert config.steam_api_key == "example-private-key"
+    assert "example-private-key" not in repr(config)
+    assert config.gaming_database_path == "custom/path.sqlite3"
+
+
 def test_defaults_and_message_content_are_safe():
     config = BotConfig.from_env({"DISCORD_BOT_TOKEN": "test"})
     assert config.default_provider == "gemini"
     assert config.enable_message_content is False
+    assert config.steam_api_key is None
+    assert config.gaming_database_path == "data/gaming.sqlite3"
     assert (config.max_input_chars, config.max_output_tokens, config.max_sessions) == (
         2000,
         1024,
