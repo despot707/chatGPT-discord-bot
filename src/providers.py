@@ -25,6 +25,60 @@ from src.config import _bool, _openai_reasoning_effort
 logger = logging.getLogger(__name__)
 
 
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _web_action_counts(output_items: Any) -> dict[str, int]:
+    """Classify web actions without exposing provider payloads in diagnostics."""
+    counts = {"search": 0, "open_page": 0, "find_in_page": 0, "unknown": 0, "missing": 0}
+    for item in output_items or []:
+        if _field(item, "type", "") != "web_search_call":
+            continue
+        action = _field(item, "action")
+        action_type = _field(action, "type") if action is not None else None
+        if action_type is None:
+            counts["missing"] += 1
+        elif action_type == "search":
+            counts["search"] += 1
+        elif action_type == "open_page":
+            counts["open_page"] += 1
+        elif action_type == "find_in_page":
+            counts["find_in_page"] += 1
+        else:
+            counts["unknown"] += 1
+    return counts
+
+
+def _safe_response_id(response: Any) -> str:
+    """Return only a tightly validated response ID for diagnostics."""
+    value = _field(response, "id")
+    if (
+        isinstance(value, str)
+        and value.startswith("resp_")
+        and value.isascii()
+        and 6 <= len(value) <= 80
+        and all(character.isalnum() or character in "_-" for character in value)
+    ):
+        return value
+    return "unavailable"
+
+
+def _safe_response_status(response: Any) -> str:
+    value = _field(response, "status")
+    allowed = {"completed", "incomplete", "failed", "queued", "in_progress", "unknown"}
+    return value if isinstance(value, str) and value in allowed else "unknown"
+
+
+def _safe_usage_count(usage: Any, field_name: str) -> int | str:
+    value = _field(usage, field_name)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return "unknown"
+
+
 class ProviderType(Enum):
     """Provider identifiers. FREE is retained only to explain old config."""
 
@@ -461,6 +515,7 @@ class OpenAIProvider(BaseProvider):
 
     def _lock_budget(self, reason: str) -> None:
         self._budget_contract_blocked = True
+        logger.warning("Strict budget ledger locked (reason=%s)", reason)
         try:
             budget = self._budget
             if budget is not None:
@@ -699,6 +754,7 @@ class OpenAIProvider(BaseProvider):
             "reasoning": reasoning,
             "service_tier": "default",
             "max_tool_calls": 1,
+            "parallel_tool_calls": False,
         }
         if used_web:
             request["tools"] = web_tool
@@ -707,6 +763,18 @@ class OpenAIProvider(BaseProvider):
         if timeout is not None:
             request["timeout"] = timeout
         response = await _bounded(self.client.responses.create(**request), timeout, "OpenAI")
+        usage = getattr(response, "usage", None)
+        output_items = getattr(response, "output", None) or []
+        action_counts = _web_action_counts(output_items)
+        logger.info(
+            "OpenAI strict web usage observed "
+            "(response_id=%s status=%s actions=%s input_tokens=%s output_tokens=%s)",
+            _safe_response_id(response),
+            _safe_response_status(response),
+            action_counts,
+            _safe_usage_count(usage, "input_tokens"),
+            _safe_usage_count(usage, "output_tokens"),
+        )
         if getattr(response, "model", "gpt-6-luna") != "gpt-6-luna":
             self._lock_budget("provider_contract_unknown_model")
             raise ProviderError(
@@ -718,17 +786,30 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(
                 "OpenAI returned an unexpected service tier; budget usage could not be verified."
             )
-        usage = getattr(response, "usage", None)
         try:
             actual_input = self._budget_count(getattr(usage, "input_tokens", None))
             actual_output = self._budget_count(getattr(usage, "output_tokens", None))
             if actual_output > max_output:
                 self._lock_budget("provider_contract_output_cap_exceeded")
                 raise ProviderError("OpenAI usage exceeded the strict output-token cap.")
-            output_items = getattr(response, "output", None) or []
-            web_calls = sum(getattr(item, "type", "") == "web_search_call" for item in output_items)
-            if web_calls > 1 or (web_calls and not used_web):
-                self._lock_budget("provider_contract_web_call_cap_exceeded")
+            web_activity = sum(action_counts.values())
+            chargeable_searches = (
+                action_counts["search"] + action_counts["unknown"] + action_counts["missing"]
+            )
+            if web_activity and not used_web:
+                self._lock_budget("provider_contract_unrequested_web_activity")
+                raise ProviderError("OpenAI used web search when it was not offered.")
+            if chargeable_searches > 1:
+                logger.error(
+                    "OpenAI strict web-search cap violation "
+                    "(response_id=%s status=%s actions=%s input_tokens=%d output_tokens=%d)",
+                    _safe_response_id(response),
+                    _safe_response_status(response),
+                    action_counts,
+                    actual_input,
+                    actual_output,
+                )
+                self._lock_budget("provider_contract_search_call_cap_exceeded")
                 raise ProviderError("OpenAI usage exceeded the strict web-search call cap.")
             if actual_input > counted_input and not used_web:
                 self._lock_budget("provider_contract_unreserved_input_tokens")
@@ -743,8 +824,8 @@ class OpenAIProvider(BaseProvider):
             actual_extras = self._budget_micros(
                 max(0, actual_input - counted_input), actual_input_rate
             )
-            if web_calls:
-                actual_extras += web_calls * 10_000
+            if chargeable_searches:
+                actual_extras += chargeable_searches * 10_000
             for reservation in reservations:
                 actual = actual_luna if reservation.bucket == "luna" else actual_extras
                 budget.settle(reservation.id, actual)
@@ -757,7 +838,7 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(
                 "OpenAI usage could not be verified; the budget reservation was retained."
             ) from None
-        if require_web and not web_calls:
+        if require_web and not action_counts["search"]:
             raise ProviderError("OpenAI did not perform the required web search.")
         output = getattr(response, "output_text", None)
         if not output:
@@ -765,7 +846,7 @@ class OpenAIProvider(BaseProvider):
         # The capability is available for ordinary chat, but its presence does
         # not mean a search was requested or used. The no-search developer
         # instruction above keeps unsupported current claims out of fallbacks.
-        return _web_citation_text(response, output) if web_calls else output
+        return _web_citation_text(response, output) if web_activity else output
 
     async def generate_image(
         self, prompt: str, model: Optional[str] = None, **kwargs: Any

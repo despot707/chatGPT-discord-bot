@@ -218,7 +218,13 @@ async def test_web_search_reserves_extras_and_settles_actual_tool_and_token_usag
         return_value=_usage_response(
             input_tokens=110,
             output_tokens=20,
-            output=[SimpleNamespace(type="web_search_call")],
+            output=[
+                SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="search")),
+                SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="open_page")),
+                SimpleNamespace(
+                    type="web_search_call", action=SimpleNamespace(type="find_in_page")
+                ),
+            ],
         )
     )
 
@@ -231,10 +237,142 @@ async def test_web_search_reserves_extras_and_settles_actual_tool_and_token_usag
     ]
     request = provider.client.responses.create.await_args.kwargs
     assert request["max_tool_calls"] == 1
+    assert request["parallel_tool_calls"] is False
     assert request["tools"] == [{"type": "web_search", "search_context_size": "low"}]
     snapshot = manager.budget.snapshot()
     assert snapshot["luna"]["monthly_spent_micros"] == 12
     assert snapshot["extras"]["monthly_spent_micros"] == 10_013
+    assert snapshot["locked"] is False
+    assert snapshot["reserved_micros"] == 0
+
+
+@pytest.mark.asyncio
+async def test_two_search_actions_lock_and_log_only_sanitized_diagnostics(tmp_path, caplog):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 10)
+    provider.client.responses.create = AsyncMock(
+        return_value=_usage_response(
+            input_tokens=20,
+            output=[
+                SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="search")),
+                SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="search")),
+            ],
+            id="resp_safe_123",
+            status="completed",
+            query="private search query",
+        )
+    )
+
+    with pytest.raises(ProviderError, match="strict web-search call cap"):
+        await provider.chat_completion(
+            [{"role": "user", "content": "private prompt"}], web_search=True
+        )
+
+    snapshot = manager.budget.snapshot()
+    assert snapshot["locked"] is True
+    assert "provider_contract_search_call_cap_exceeded" in caplog.text
+    assert "actions={'search': 2" in caplog.text
+    assert "resp_safe_123" in caplog.text
+    assert "private search query" not in caplog.text
+    assert "private prompt" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_web_activity_without_offered_tool_locks_the_ledger(tmp_path, caplog):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 10)
+    provider.client.responses.create = AsyncMock(
+        return_value=_usage_response(
+            input_tokens=10,
+            output=[
+                SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="open_page"))
+            ],
+        )
+    )
+
+    with pytest.raises(ProviderError, match="when it was not offered"):
+        await provider.chat_completion([{"role": "user", "content": "hello"}])
+
+    assert manager.budget.snapshot()["locked"] is True
+    assert "provider_contract_unrequested_web_activity" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unknown_web_action_is_charged_as_a_search_conservatively(tmp_path):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 10)
+    provider.client.responses.create = AsyncMock(
+        return_value=_usage_response(
+            input_tokens=110,
+            output=[
+                SimpleNamespace(
+                    type="web_search_call", action=SimpleNamespace(type="future_action")
+                )
+            ],
+        )
+    )
+
+    assert (
+        await provider.chat_completion(
+            [{"role": "user", "content": "latest news"}], web_search=True
+        )
+        == "answer"
+    )
+    snapshot = manager.budget.snapshot()
+    assert snapshot["extras"]["monthly_spent_micros"] == 10_013
+    assert snapshot["locked"] is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_web_action_is_not_proof_of_required_search(tmp_path):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 10)
+    provider.client.responses.create = AsyncMock(
+        return_value=_usage_response(
+            input_tokens=110,
+            output=[
+                SimpleNamespace(
+                    type="web_search_call", action=SimpleNamespace(type="future_action")
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(ProviderError, match="did not perform the required web search"):
+        await provider.chat_completion(
+            [{"role": "user", "content": "latest news"}],
+            web_search=True,
+            require_web_search=True,
+        )
+
+    snapshot = manager.budget.snapshot()
+    assert snapshot["extras"]["monthly_spent_micros"] == 10_013
+    assert snapshot["reserved_micros"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_cost_above_reservation_locks_the_ledger(tmp_path):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 64_000)
+    provider.client.responses.create = AsyncMock(
+        return_value=_usage_response(
+            input_tokens=320_001,
+            output_tokens=20,
+            output=[SimpleNamespace(type="web_search_call", action=SimpleNamespace(type="search"))],
+        )
+    )
+
+    with pytest.raises(ProviderError, match="exceeded its reservation"):
+        await provider.chat_completion(
+            [{"role": "user", "content": "large research prompt"}], web_search=True
+        )
+
+    assert manager.budget.snapshot()["locked"] is True
 
 
 @pytest.mark.asyncio
