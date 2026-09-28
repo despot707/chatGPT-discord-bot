@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import logging
 
-from src.aclient import DiscordClient
+from src.aclient import DiscordClient as BaseDiscordClient
+from src.birthday_client import BirthdayMemoryMixin
 from src.config import BotConfig
 from src.providers import ProviderManager
 
 logger = logging.getLogger(__name__)
+
+
+class DiscordClient(BirthdayMemoryMixin, BaseDiscordClient):
+    """Chat/gaming client with resumable birthday history and stable identities."""
 
 
 def run_discord_bot(config: BotConfig | None = None, provider_manager=None) -> None:
