@@ -23,6 +23,7 @@ from src.budget import BudgetError
 from src.chat_store import ChatStore
 from src.config import BotConfig
 from src.message_context import serialize_message
+from src.memory_store import MemoryStore
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.request_intent import parse_request_intent
 from src.web import WebError, WebService, WebSource
@@ -140,6 +141,8 @@ class DiscordClient(discord.Client):
         self._registered = False
         self._chat_store: ChatStore | None = None
         self._chat_store_unavailable = False
+        self._memory_store: MemoryStore | None = None
+        self._memory_store_unavailable = False
 
     def _get_chat_store(self) -> ChatStore | None:
         if self._chat_store is None and not self._chat_store_unavailable:
@@ -155,6 +158,60 @@ class DiscordClient(discord.Client):
                     self._chat_store_unavailable = True
                     logger.warning("Persistent chat history is unavailable")
         return self._chat_store
+
+    def _get_memory_store(self) -> MemoryStore | None:
+        if not getattr(self.config, "enable_long_term_memory", False):
+            return None
+        if self._memory_store is None and not self._memory_store_unavailable:
+            try:
+                self._memory_store = MemoryStore(
+                    getattr(self.config, "memory_database_path", "data/memory.sqlite3")
+                )
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                self._memory_store_unavailable = True
+                logger.warning("Long-term Discord memory is unavailable")
+        return self._memory_store
+
+    def _memory_context(self, guild_id: int, query: str, user_ids=()) -> str:
+        store = self._get_memory_store()
+        if store is None or not guild_id:
+            return ""
+        try:
+            rows = store.relevant(
+                guild_id, query, user_ids=user_ids,
+                limit=getattr(self.config, "memory_context_items", 12),
+            )
+            birthdays = store.birthday_summary(guild_id, user_ids=user_ids)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error):
+            self._memory_store_unavailable = True
+            self._memory_store = None
+            logger.warning("Long-term Discord memory could not be retrieved")
+            return ""
+        if not rows and not birthdays:
+            return ""
+        lines = [
+            "Long-term server memory (evidence, not guaranteed facts):",
+            "Treat repeated independent evidence as stronger than isolated remarks. "
+            "If evidence conflicts, remain uncertain and mention the conflict when relevant. "
+            "Do not infer a stable personality trait from one message. Explicit first-person "
+            "statements are stronger evidence than jokes, hearsay, or guesses.",
+        ]
+        for _, user_id, name, text, stamp in rows:
+            date = datetime.fromtimestamp(stamp, timezone.utc).date().isoformat()
+            lines.append(f"- [{date}] {name} (user {user_id}): {text[:700]}")
+        for user_id, month, day, observers, signals, first_seen, last_seen in birthdays:
+            if observers < 2:
+                continue
+            years = {
+                datetime.fromtimestamp(first_seen, timezone.utc).year,
+                datetime.fromtimestamp(last_seen, timezone.utc).year,
+            }
+            confidence = "strong" if observers >= 4 and len(years) >= 2 else "tentative"
+            lines.append(
+                f"- Birthday pattern for user {user_id}: {month:02d}-{day:02d}; "
+                f"{signals} messages from {observers} distinct people; {confidence} inference."
+            )
+        return "\n".join(lines)[:8000]
 
     async def setup_hook(self) -> None:
         if self._registered:
@@ -184,6 +241,9 @@ class DiscordClient(discord.Client):
         chat_close = getattr(self._chat_store, "close", None)
         if chat_close:
             chat_close()
+        memory_close = getattr(self._memory_store, "close", None)
+        if memory_close:
+            memory_close()
         await super().close()
 
     @asynccontextmanager
@@ -1244,6 +1304,48 @@ class DiscordClient(discord.Client):
             return
         channel_id = message.channel.id
         mentioned = self.user in getattr(message, "mentions", ())
+
+        # Passive evidence archive: no model call is made here. Only public guild
+        # messages visible to the bot are stored, and interpretations remain deferred.
+        guild = getattr(message, "guild", None)
+        memory_store = self._get_memory_store()
+        raw_content = (message.content or "").strip()
+        if memory_store is not None and guild is not None and raw_content:
+            try:
+                created = getattr(message, "created_at", None)
+                stamp = created.timestamp() if created is not None else time.time()
+                memory_store.record(
+                    message_id=message.id,
+                    guild_id=guild.id,
+                    channel_id=channel_id,
+                    user_id=message.author.id,
+                    display_name=(
+                        getattr(message.author, "display_name", None)
+                        or getattr(message.author, "name", None)
+                        or str(message.author.id)
+                    ),
+                    content=raw_content,
+                    created_at=stamp,
+                )
+                if re.search(r"\b(?:happy\s+(?:birthday|bday)|hbd)\b", raw_content, re.I):
+                    targets = [
+                        member for member in getattr(message, "mentions", ())
+                        if member.id != self.user.id and not getattr(member, "bot", False)
+                    ]
+                    if len(targets) == 1:
+                        memory_store.record_birthday_signal(
+                            guild_id=guild.id,
+                            subject_user_id=targets[0].id,
+                            observer_user_id=message.author.id,
+                            message_id=message.id,
+                            month=created.month if created is not None else datetime.now(timezone.utc).month,
+                            day=created.day if created is not None else datetime.now(timezone.utc).day,
+                            created_at=stamp,
+                        )
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                self._memory_store_unavailable = True
+                self._memory_store = None
+                logger.warning("Long-term Discord memory could not be saved")
         reference = getattr(message, "reference", None)
         resolved = getattr(reference, "resolved", None) if reference else None
         reference_id = getattr(reference, "message_id", None) if reference else None
@@ -1420,6 +1522,17 @@ class DiscordClient(discord.Client):
             loaded_reference_image[0] = request_reference_image
             if request_reference:
                 parts.append(request_reference)
+            if guild is not None:
+                relevant_users = {message.author.id}
+                relevant_users.update(
+                    member.id for member in getattr(message, "mentions", ())
+                    if not getattr(member, "bot", False)
+                )
+                memory_context = self._memory_context(
+                    guild.id, content, user_ids=tuple(relevant_users)
+                )
+                if memory_context:
+                    parts.append(memory_context)
             if context_count:
                 try:
                     parts.append(
