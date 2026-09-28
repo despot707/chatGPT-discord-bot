@@ -8,6 +8,7 @@ from src.aclient import DiscordClient as BaseDiscordClient
 from src.birthday_client import BirthdayMemoryMixin
 from src.config import BotConfig
 from src.providers import ProviderManager
+from src.runtime_storage import prepare_runtime_storage
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ def run_discord_bot(config: BotConfig | None = None, provider_manager=None) -> N
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    prepare_runtime_storage()
     config = config or BotConfig.from_env()
     manager = provider_manager or ProviderManager()
     client = DiscordClient(config, provider_manager=manager)
