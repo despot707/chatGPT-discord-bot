@@ -146,8 +146,10 @@ restore it. This is intentionally more conservative than an invoice estimate.
 
 Ordinary chat can continue without live search after extras run out. Explicit
 search requests stop when they cannot reserve their maximum cost. Strict mode
-pins chat to GPT-6 Luna, Standard processing, no reasoning, and at most 500 output
-tokens. It blocks other providers, expensive model overrides, Tavily searches,
+pins chat to GPT-6 Luna and Standard processing. Ordinary chat uses no extra
+reasoning and at most 500 output tokens. An explicit reasoning request uses low
+effort and at most 2,000 total output tokens. It blocks other providers,
+expensive model overrides, Tavily searches,
 and image generation. Voice is not implemented. These paths must have verified
 cost bounds before being enabled; allowing a model in the OpenAI dashboard does
 not enable that feature in the bot. Existing-image posting and public-page
@@ -156,10 +158,22 @@ metered Luna path.
 
 Reasoning is not a separate free allowance: any reported reasoning tokens are
 included in the API's total output-token usage, which is charged to Luna's $7
-pool. The 500-token cap covers reasoning and visible output together. Strict
-mode currently forces `reasoning.effort=none`, even if a different effort is
-configured, to preserve ordinary chat capacity. See OpenAI's
+pool. Each response's cap covers reasoning and visible output together. Strict
+mode defaults to `reasoning.effort=none`, even if a different effort is
+configured. `/chat reason:true` or a direct request such as "think carefully
+about this" enables low reasoning for that request only. It does not change
+the next message or select a more expensive chat model. See OpenAI's
 [reasoning cost controls](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs).
+
+Discord requests explicitly select reasoning per message, including outside
+strict mode: an environment reasoning preference does not silently turn it on.
+Web access remains an innate capability the model may use when needed; it does
+not require a separate request. Explicit `/search` still requires a search.
+Mention requests such as "draw a blue bird" route only to the image handler,
+never to an initial chat completion. Quoted commands, prior replies, and phrases
+such as "draw a conclusion" do not activate extra capabilities. Image generation
+remains disabled in strict mode because GPT Image 2.5 has no documented enforced
+pre-request output-token or charge ceiling; output cost estimates are not a hard cap.
 
 Provider and budget failures in normal Discord replies say "I can't do that
 right now." without exposing spending, quota, or provider configuration details.

@@ -87,7 +87,7 @@ async def test_registered_commands_have_valid_discord_schemas():
     for command in commands.values():
         command.to_dict(client.tree)
     chat_options = {option.name for option in commands["chat"].parameters}
-    assert {"image", "use_web", "context_messages"} <= chat_options
+    assert {"image", "use_web", "reason", "context_messages"} <= chat_options
 
 
 @pytest.mark.asyncio
@@ -251,7 +251,7 @@ async def test_reply_to_bot_uses_readable_reference_text_and_image():
         channel_id=2,
         channel=channel,
         author=SimpleNamespace(id=77, bot=True, display_name="Bot", name="Bot"),
-        content="the red object is a marker",
+        content="think carefully: the red object is a marker",
         attachments=[image],
     )
     message = SimpleNamespace(
@@ -266,10 +266,11 @@ async def test_reply_to_bot_uses_readable_reference_text_and_image():
     )
     await client.on_message(message)
     assert (
-        "Referenced message from Bot: the red object is a marker"
+        "Referenced message from Bot: think carefully: the red object is a marker"
         in manager.calls[0][0][-1]["content"]
     )
     assert manager.calls[0][1] == (ImageInput(png_bytes(), "image/png"),)
+    assert manager.calls[0][2]["reasoning_requested"] is False
     assert all(
         "image/" not in str(turn) for turn in next(iter(client.conversations.values())).messages
     )
@@ -367,6 +368,113 @@ async def test_attachment_image_reaches_vision_request_but_not_history():
     await client._chat_interaction(target, "what is here", image=attachment)
     assert manager.calls[0][1] == (ImageInput(png_bytes(), "image/png"),)
     assert "png" not in str(next(iter(client.conversations.values())).messages).lower()
+
+
+@pytest.mark.asyncio
+async def test_chat_defaults_to_no_additional_reasoning_and_allows_explicit_reason_option():
+    client, manager, _ = make_client()
+    client._register_commands()
+
+    await client._commands["chat"].callback(interaction(), "ordinary question")
+    assert manager.calls[-1][2]["reasoning_requested"] is False
+
+    await client._commands["chat"].callback(interaction(), "ordinary question", reason=True)
+    assert manager.calls[-1][2]["reasoning_requested"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_mentioned_draw_uses_only_enabled_image_generator_without_chat_completion(enabled):
+    client, manager, _ = make_client(enable_message_content=True, enable_image_generation=enabled)
+    client._connection.user = SimpleNamespace(id=77)
+    client.generate_image = AsyncMock(return_value=b"png-bytes")
+    channel = SimpleNamespace(id=2, send=AsyncMock())
+
+    @asynccontextmanager
+    async def typing():
+        yield
+
+    channel.typing = typing
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content="<@77> Please draw: a small red bird",
+    )
+
+    await client.on_message(message)
+
+    assert not manager.calls
+    channel.send.assert_awaited_once()
+    if enabled:
+        client.generate_image.assert_awaited_once()
+        assert client.generate_image.await_args.args[0] == "a small red bird"
+        assert channel.send.await_args.kwargs["reference"] is message
+        assert channel.send.await_args.kwargs["mention_author"] is False
+    else:
+        client.generate_image.assert_not_awaited()
+        assert channel.send.await_args.args[0] == "I can't do that right now."
+
+
+@pytest.mark.asyncio
+async def test_quoted_draw_request_only_uses_normal_chat():
+    client, manager, _ = make_client(enable_message_content=True, enable_image_generation=True)
+    client._connection.user = SimpleNamespace(id=77)
+    client.generate_image = AsyncMock(return_value=b"png-bytes")
+    channel = SimpleNamespace(id=2, send=AsyncMock())
+
+    @asynccontextmanager
+    async def typing():
+        yield
+
+    channel.typing = typing
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content='<@77> "draw a small red bird"',
+    )
+
+    await client.on_message(message)
+
+    client.generate_image.assert_not_awaited()
+    assert manager.calls
+    assert manager.calls[0][2]["reasoning_requested"] is False
+
+
+@pytest.mark.asyncio
+async def test_mentioned_reasoning_prefix_is_applied_to_current_request():
+    client, manager, _ = make_client(enable_message_content=True)
+    client._connection.user = SimpleNamespace(id=77)
+    channel = SimpleNamespace(id=2, send=AsyncMock())
+
+    @asynccontextmanager
+    async def typing():
+        yield
+
+    channel.typing = typing
+    message = SimpleNamespace(
+        author=SimpleNamespace(id=8, bot=False, display_name="Alex", name="Alex"),
+        webhook_id=None,
+        mentions=[client.user],
+        reference=None,
+        channel=channel,
+        guild=SimpleNamespace(id=1),
+        attachments=[],
+        content="<@77> Please think carefully about this question",
+    )
+
+    await client.on_message(message)
+
+    assert manager.calls[0][2]["reasoning_requested"] is True
 
 
 @pytest.mark.asyncio

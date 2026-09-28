@@ -119,7 +119,7 @@ async def test_invalid_negative_output_limit_is_rejected_without_clamping_or_dis
 
 
 @pytest.mark.asyncio
-async def test_optional_web_falls_back_to_plain_luna_with_truthful_prefix_when_extras_too_small(
+async def test_optional_web_falls_back_to_plain_luna_with_truthful_context_when_extras_too_small(
     tmp_path,
 ):
     manager = _manager(
@@ -134,7 +134,7 @@ async def test_optional_web_falls_back_to_plain_luna_with_truthful_prefix_when_e
     result = await provider.chat_completion(
         [{"role": "user", "content": "What happened today?"}], web_search=True
     )
-    assert result.startswith("Live web search is unavailable for this response.")
+    assert result == "answer"
     provider.client.responses.create.assert_awaited_once()
     request = provider.client.responses.create.await_args.kwargs
     assert "tools" not in request
@@ -159,7 +159,7 @@ async def test_optional_web_reservation_race_recounts_and_reserves_luna_only(tmp
         [{"role": "user", "content": "What happened today?"}], web_search=True
     )
 
-    assert result.startswith("Live web search is unavailable for this response.")
+    assert result == "answer"
     assert provider.client.responses.input_tokens.count.await_count == 2
     first, second = provider.client.responses.input_tokens.count.await_args_list
     assert "tools" in first.kwargs
@@ -235,6 +235,22 @@ async def test_web_search_reserves_extras_and_settles_actual_tool_and_token_usag
     snapshot = manager.budget.snapshot()
     assert snapshot["luna"]["monthly_spent_micros"] == 12
     assert snapshot["extras"]["monthly_spent_micros"] == 10_013
+
+
+@pytest.mark.asyncio
+async def test_innate_web_capability_stays_quiet_when_no_search_is_needed(tmp_path):
+    manager = _manager(tmp_path)
+    provider = manager.get_provider()
+    _count(provider, 10)
+    provider.client.responses.create = AsyncMock(return_value=_usage_response())
+    result = await provider.chat_completion([{"role": "user", "content": "hello"}], web_search=True)
+    assert result == "answer"
+    request = provider.client.responses.create.await_args.kwargs
+    assert "tools" in request
+    assert "tool_choice" not in request
+    assert request["reasoning"] == {"effort": "none"}
+    assert manager.budget.snapshot()["extras"]["monthly_spent_micros"] == 0
+    assert manager.budget.snapshot()["reserved_micros"] == 0
 
 
 @pytest.mark.asyncio

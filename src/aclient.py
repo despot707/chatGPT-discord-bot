@@ -24,6 +24,7 @@ from src.chat_store import ChatStore
 from src.config import BotConfig
 from src.message_context import serialize_message
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
+from src.request_intent import parse_request_intent
 from src.web import WebError, WebService, WebSource
 
 PUBLIC_FAILURE = "I can't do that right now."
@@ -332,6 +333,7 @@ class DiscordClient(discord.Client):
         speaker_label: str | None = None,
         web_search: bool | None = None,
         require_web_search: bool = False,
+        reasoning_requested: bool = False,
         include_shared_history: bool = False,
     ) -> str:
         if len(text) > self.config.max_input_chars:
@@ -398,6 +400,7 @@ class DiscordClient(discord.Client):
                     else web_search
                 ),
                 require_web_search=require_web_search,
+                reasoning_requested=reasoning_requested,
             )
             reply = result.text
             conv.messages.extend(
@@ -482,7 +485,7 @@ class DiscordClient(discord.Client):
         settings_snapshot: Optional[tuple[ProviderType, str]] = None,
     ) -> str | bytes:
         if not self.config.enable_image_generation:
-            raise BotRequestError("Image generation is disabled by the bot administrator.")
+            raise BotRequestError(PUBLIC_FAILURE)
         if len(prompt) > self.config.max_input_chars:
             raise BotRequestError(
                 f"Prompt is too long (maximum {self.config.max_input_chars} characters)."
@@ -500,7 +503,7 @@ class DiscordClient(discord.Client):
             )
             provider = self.provider_manager.get_provider(provider_type)
             if not provider.supports_image_generation():
-                raise BotRequestError("Image generation is unavailable for this provider.")
+                raise BotRequestError(PUBLIC_FAILURE)
             models = self.provider_manager.get_provider_models(provider_type)
             image_model = (
                 configured_model
@@ -540,6 +543,7 @@ class DiscordClient(discord.Client):
             message: str,
             image: discord.Attachment | None = None,
             use_web: bool = False,
+            reason: bool = False,
             context_messages: app_commands.Range[int, 0, 20] = 0,
         ):
             await self._chat_interaction(
@@ -547,6 +551,7 @@ class DiscordClient(discord.Client):
                 message,
                 image=image,
                 use_web=use_web,
+                reasoning_requested=reason,
                 context_messages=context_messages,
             )
 
@@ -848,6 +853,7 @@ class DiscordClient(discord.Client):
         *,
         image: discord.Attachment | None = None,
         use_web: bool = False,
+        reasoning_requested: bool = False,
         context_messages: int = 0,
     ) -> None:
         scope = self._scope(interaction)
@@ -945,6 +951,7 @@ class DiscordClient(discord.Client):
                     and not (use_web and self.config.enable_web_search)
                 ),
                 require_web_search=use_web,
+                reasoning_requested=reasoning_requested,
                 include_shared_history=self._can_read_shared_history(
                     interaction.channel, interaction.user
                 ),
@@ -1270,6 +1277,7 @@ class DiscordClient(discord.Client):
             return
         content = (message.content or "").strip()
         content = re.sub(rf"<@!?{self.user.id}>", "", content).strip()
+        intent = parse_request_intent(content)
         image_attachment = next(
             (
                 item
@@ -1319,6 +1327,45 @@ class DiscordClient(discord.Client):
             )
             return
         if not content:
+            return
+
+        if intent.draw_prompt:
+            if not self.config.enable_image_generation:
+                await message.channel.send(
+                    PUBLIC_FAILURE, allowed_mentions=discord.AllowedMentions.none()
+                )
+                return
+            try:
+                settings = self.get_settings(scope)
+                image = await self.generate_image(
+                    intent.draw_prompt, scope, (settings.provider, settings.model)
+                )
+                embed = discord.Embed(
+                    title="Generated image", description=intent.draw_prompt[:1000]
+                )
+                if isinstance(image, str):
+                    embed.set_image(url=image)
+                    await message.channel.send(
+                        embed=embed,
+                        reference=message,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await message.channel.send(
+                        file=discord.File(io.BytesIO(image), filename="generated.png"),
+                        reference=message,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except (ProviderError, BudgetError, BotRequestError) as exc:
+                await message.channel.send(
+                    public_error_message(exc), allowed_mentions=discord.AllowedMentions.none()
+                )
+            except Exception:
+                await message.channel.send(
+                    PUBLIC_FAILURE, allowed_mentions=discord.AllowedMentions.none()
+                )
             return
         context_count = (
             min(self.config.automatic_context_count, 20)
@@ -1427,6 +1474,7 @@ class DiscordClient(discord.Client):
                     include_shared_history=self._can_read_shared_history(
                         message.channel, message.author
                     ),
+                    reasoning_requested=intent.reasoning_requested,
                 )
             from utils.message_utils import send_split_message
 

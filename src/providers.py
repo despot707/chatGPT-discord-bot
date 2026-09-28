@@ -410,7 +410,11 @@ class OpenAIProvider(BaseProvider):
         }
         if kwargs.get("max_tokens") is not None:
             request["max_output_tokens"] = kwargs["max_tokens"]
-        if self._reasoning_effort is not None:
+        if "reasoning_requested" in kwargs:
+            if not isinstance(kwargs["reasoning_requested"], bool):
+                raise ProviderError("reasoning_requested must be a boolean.")
+            request["reasoning"] = {"effort": "low" if kwargs["reasoning_requested"] else "none"}
+        elif self._reasoning_effort is not None:
             request["reasoning"] = {"effort": self._reasoning_effort}
         if kwargs.get("web_search", False):
             request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
@@ -476,6 +480,10 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError("Strict budget mode only permits the gpt-6-luna model.")
         if self._budget_contract_blocked:
             raise ProviderError("The budget ledger is locked; paid requests are blocked.")
+        reasoning_requested = kwargs.get("reasoning_requested", False)
+        if not isinstance(reasoning_requested, bool):
+            raise ProviderError("reasoning_requested must be a boolean.")
+        reasoning = {"effort": "low" if reasoning_requested else "none"}
         timeout = kwargs.get("request_timeout")
         request_messages = [dict(message) for message in messages]
         images: tuple[ImageInput, ...] = tuple(kwargs.get("images", ()))
@@ -506,10 +514,14 @@ class OpenAIProvider(BaseProvider):
         require_web = bool(kwargs.get("require_web_search", False))
         if require_web:
             wants_web = True
-        web_requested = bool(kwargs.get("web_search", False) or require_web)
-        requested_output = kwargs.get("max_tokens")
+        # Extra thinking is an explicit, per-request choice. Reserve the entire
+        # reasoning + visible output cap in Luna's existing daily/monthly pool.
+        output_cap = 2000 if reasoning_requested else 500
+        requested_output = (
+            kwargs.get("reasoning_max_tokens") if reasoning_requested else kwargs.get("max_tokens")
+        )
         if requested_output is None:
-            max_output = 500
+            max_output = output_cap
         elif (
             isinstance(requested_output, bool)
             or not isinstance(requested_output, int)
@@ -517,7 +529,7 @@ class OpenAIProvider(BaseProvider):
         ):
             raise ProviderError("max_tokens must be a positive integer in strict budget mode.")
         else:
-            max_output = min(500, requested_output)
+            max_output = min(output_cap, requested_output)
         try:
             state = cast(dict[str, Any], budget.snapshot())
         except Exception:
@@ -578,7 +590,7 @@ class OpenAIProvider(BaseProvider):
         base_request: dict[str, Any] = {
             "model": "gpt-6-luna",
             "input": request_messages,
-            "reasoning": {"effort": "none"},
+            "reasoning": reasoning,
         }
         web_tool = [{"type": "web_search", "search_context_size": "low"}]
         if wants_web:
@@ -639,7 +651,7 @@ class OpenAIProvider(BaseProvider):
             base_request = {
                 "model": "gpt-6-luna",
                 "input": request_messages,
-                "reasoning": {"effort": "none"},
+                "reasoning": reasoning,
             }
             try:
                 count_response = await _bounded(
@@ -684,7 +696,7 @@ class OpenAIProvider(BaseProvider):
             "input": request_messages,
             "store": False,
             "max_output_tokens": max_output,
-            "reasoning": {"effort": "none"},
+            "reasoning": reasoning,
             "service_tier": "default",
             "max_tool_calls": 1,
         }
@@ -750,12 +762,10 @@ class OpenAIProvider(BaseProvider):
         output = getattr(response, "output_text", None)
         if not output:
             raise ProviderError("OpenAI returned no text for this request.")
-        text = _web_citation_text(response, output) if used_web else output
-        if web_requested and not used_web:
-            text = "Live web search is unavailable for this response.\n\n" + text
-        elif web_requested and not web_calls:
-            text = "Live web search was not used for this response.\n\n" + text
-        return text
+        # The capability is available for ordinary chat, but its presence does
+        # not mean a search was requested or used. The no-search developer
+        # instruction above keeps unsupported current claims out of fallbacks.
+        return _web_citation_text(response, output) if web_calls else output
 
     async def generate_image(
         self, prompt: str, model: Optional[str] = None, **kwargs: Any
