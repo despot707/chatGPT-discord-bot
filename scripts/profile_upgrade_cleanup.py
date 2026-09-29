@@ -63,7 +63,7 @@ replace('src/profile_client.py', '''        for command in (birthdays, birthday_
         self.tree.add_command(birthday_forget)''')
 replace('src/birthday_client.py', '    kwargs = dict(limit=100, oldest_first=False)', '    kwargs: dict[str, Any] = dict(limit=100, oldest_first=False)')
 replace('src/birthday_client.py', '        self._birthday_archived_channels = {}', '        self._birthday_archived_channels: dict[int, dict[int, Any]] = {}')
-replace('src/birthday_client.py', '            failures, pages = {}, 0', '            failures: dict[Any, int] = {}\n            pages = 0')
+replace('src/birthday_client.py', '        failures, pages = {}, 0', '        failures: dict[Any, int] = {}\n        pages = 0')
 replace('src/birthday_client.py', '            message = await channel.fetch_message(payload.message_id)', '''            fetch_message = getattr(channel, 'fetch_message', None)
             if not callable(fetch_message):
                 return
