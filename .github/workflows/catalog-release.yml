@@ -36,10 +36,19 @@ jobs:
           python -m compileall -q src main.py tests scripts
       - name: Import complete public catalog with default-language fallback
         run: python -u scripts/build_game_catalog.py
+      - name: Preserve imported public catalog for verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-public-data
+          path: assets/game_catalog*
+          if-no-files-found: warn
+          retention-days: 1
       - name: Verify packaged catalog and icon
         shell: python
         run: |
-          import json, pathlib, time
+          import json, pathlib, sys, time
+          sys.path.insert(0, str(pathlib.Path.cwd()))
           from PIL import Image
           from src.game_catalog import GameCatalog
           start=time.monotonic()
