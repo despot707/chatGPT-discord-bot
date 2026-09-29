@@ -62,4 +62,4 @@ You may stop using the Service at any time. Server administrators may remove the
 
 ## Contact
 
-Questions about these Terms can be raised through the Service's Discord support/contact method shown in the application profile. The application owner should configure a durable public support contact in the Discord Developer Portal before commercial launch.
+Questions about these Terms or the Service can be raised at https://github.com/despot707/chatGPT-discord-bot/issues. Do not include passwords, tokens, private message content, or other sensitive information in a public issue. Privacy deletion and correction controls are available in-app.
