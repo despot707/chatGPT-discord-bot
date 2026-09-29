@@ -150,6 +150,24 @@ class ProfileClientMixin(_ProfileBase):
                     request_timeout=self.config.request_timeout_seconds,
                 )
             operation, data = parse_proposal(result.text)
+            if operation == "game":
+                await getattr(self, "show_game_search")(
+                    interaction,
+                    data["name"],
+                    defaults={k: v for k, v in data.items() if k in ("role", "style")},
+                )
+                return
+            if operation == "remove_game":
+                matches = [
+                    g for g in profile["games"] if g["name"].casefold() == data["name"].casefold()
+                ]
+                if len(matches) != 1:
+                    await private_notice(
+                        interaction,
+                        "Choose the saved game in /profile so the correct title is removed.",
+                    )
+                    return
+                data = {k: v for k, v in matches[0].items() if k in ("name", "catalog_id")}
             panel = ProfilePanel(
                 self,
                 scope[0],

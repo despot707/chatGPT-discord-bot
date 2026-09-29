@@ -42,8 +42,8 @@ def validate_change(operation: str, data: dict) -> dict:
     """Reject unknown fields; never accept identity/authorization from model output."""
     schemas = {
         "birthday": {"month", "day", "visibility"},
-        "game": {"name", "role", "style", "visibility"},
-        "remove_game": {"name"},
+        "game": {"name", "role", "style", "visibility", "catalog_id"},
+        "remove_game": {"name", "catalog_id"},
         "preferences": {"timezone", "availability", "game_types", "visibility"},
         "remove_birthday": set(),
         "hide_all": set(),
@@ -61,13 +61,21 @@ def validate_change(operation: str, data: dict) -> dict:
             raise ValueError("That day does not exist in the selected month.") from None
         return dict(month=month, day=day, visibility=_visibility(data))
     if operation in ("game", "remove_game"):
-        name = _text(data.get("name"), "Game", 80)
+        catalog_id = data.get("catalog_id")
+        if catalog_id is not None and (
+            not isinstance(catalog_id, str)
+            or not re.fullmatch(r"wikidata:Q[1-9][0-9]*", catalog_id)
+        ):
+            raise ValueError("Select a game from the catalog.")
+        identity = {"catalog_id": catalog_id} if catalog_id is not None else {}
+        name = _text(data.get("name"), "Game", 200 if catalog_id else 80)
         if operation == "remove_game":
-            return {"name": name}
+            return dict(name=name, **identity)
         style = data.get("style", "both")
         if style not in ("casual", "competitive", "both"):
             raise ValueError("Choose casual, competitive, or both.")
         return dict(
+            **identity,
             name=name,
             role=_text(data.get("role", ""), "Role", 60, optional=True),
             style=style,
@@ -103,6 +111,13 @@ def validate_change(operation: str, data: dict) -> dict:
             out[key] = list(dict.fromkeys(values))
         return out
     return {}
+
+
+def same_game(left, right):
+    """Known IDs take priority; only exact legacy names may migrate on explicit save."""
+    if left.get("catalog_id") and right.get("catalog_id"):
+        return left["catalog_id"] == right["catalog_id"]
+    return left["name"].casefold() == right["name"].casefold()
 
 
 def visible_profile(profile: dict, *, owner: bool = False) -> dict:
@@ -173,11 +188,7 @@ class ProfileStore:
                 current["preferences"] = data
             elif operation == "game":
                 index = next(
-                    (
-                        i
-                        for i, g in enumerate(current["games"])
-                        if g["name"].casefold() == data["name"].casefold()
-                    ),
+                    (i for i, g in enumerate(current["games"]) if same_game(g, data)),
                     None,
                 )
                 if index is not None:
@@ -189,9 +200,7 @@ class ProfileStore:
                         )
                     current["games"].append(data)
             elif operation == "remove_game":
-                current["games"] = [
-                    g for g in current["games"] if g["name"].casefold() != data["name"].casefold()
-                ]
+                current["games"] = [g for g in current["games"] if not same_game(g, data)]
             elif operation == "hide_all":
                 for item in [current["birthday"], current["preferences"], *current["games"]]:
                     if item:
@@ -226,6 +235,22 @@ class ProfileStore:
                 if len(result) >= limit:
                     break
             return result
+
+    def players_for(self, guild_id, catalog_id, *, limit=20):
+        """Only opted-in games from this server; no fuzzy identity matching."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT user_id,payload FROM member_settings WHERE guild_id=?", (guild_id,)
+            )
+            matches = []
+            for uid, payload in rows:
+                for game in json.loads(payload).get("games", []):
+                    if game.get("catalog_id") == catalog_id and game.get("visibility") == "server":
+                        matches.append((uid, game))
+                        break
+                if len(matches) >= min(20, limit):
+                    break
+            return matches
 
     def close(self):
         pass

@@ -176,7 +176,7 @@ class ProfilePanel(ui.LayoutView):
         elif screen == "games":
             children.append(
                 ui.TextDisplay(
-                    "### Your games\nChoose a saved game to edit its role, play style and sharing."
+                    "### Your games\nSelect a catalog game. For suggestions as you type, use /addgame."
                 )
             )
             if profile["games"]:
@@ -187,7 +187,7 @@ class ProfilePanel(ui.LayoutView):
                 )
             children.append(
                 ui.ActionRow(
-                    _Button("Add a game", self.add_game, style=discord.ButtonStyle.primary),
+                    _Button("Search games", self.add_game, style=discord.ButtonStyle.primary),
                     _Button("Back", self.home),
                 )
             )
@@ -336,8 +336,18 @@ class ProfilePanel(ui.LayoutView):
     async def save(self, interaction, operation, data, *, modal=False):
         if not await self.authorized(interaction, modal=modal):
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(
+            ephemeral=True, thinking=bool(modal and getattr(interaction, "message", None) is None)
+        )
         try:
+            if operation == "game":
+                catalog = await self.client._catalog()
+                chosen = await asyncio.to_thread(catalog.get, data.get("catalog_id", ""))
+                if chosen is None:
+                    raise ValueError(
+                        "Select a game from the catalog. Free-typed names are not saved."
+                    )
+                data = dict(data, name=chosen["name"], catalog_id=chosen["id"])
             if operation == "forget":
                 current = await self.client.erase_profile_data(
                     self.guild_id, self.owner_id, self.profile["revision"]
@@ -392,10 +402,14 @@ class ProfilePanel(ui.LayoutView):
         await self.switch(i, "data")
 
     async def add_game(self, i):
-        await i.response.send_modal(GameModal(self))
+        await i.response.send_modal(GameSearchModal(self))
 
     async def edit_game(self, i):
-        await i.response.send_modal(GameModal(self, self.profile["games"][self.selected]))
+        game = self.profile["games"][self.selected]
+        if not game.get("catalog_id"):
+            await i.response.send_modal(GameSearchModal(self, query=game["name"]))
+        else:
+            await i.response.send_modal(GameModal(self, game))
 
     async def edit_birthday(self, i):
         await i.response.send_modal(BirthdayModal(self))
@@ -408,7 +422,15 @@ class ProfilePanel(ui.LayoutView):
 
     async def remove_game(self, i):
         await self.switch(
-            i, proposal=("remove_game", {"name": self.profile["games"][self.selected]["name"]})
+            i,
+            proposal=(
+                "remove_game",
+                {
+                    k: v
+                    for k, v in self.profile["games"][self.selected].items()
+                    if k in ("name", "catalog_id")
+                },
+            ),
         )
 
     async def remove_birthday(self, i):
@@ -493,6 +515,87 @@ class _OwnedModal(ui.Modal):
         return item
 
 
+class GameSearchModal(_OwnedModal):
+    def __init__(self, panel, query=""):
+        super().__init__(panel, "Find a game")
+        self.query = self.field(
+            "Search the game catalog",
+            ui.TextInput(
+                default=query[:100],
+                placeholder="League, Zelda, Halo...",
+                max_length=100,
+                required=False,
+            ),
+            "Search text is not saved. Live suggestions are also available with /addgame.",
+        )
+
+    async def on_submit(self, interaction):
+        if await self.panel.authorized(interaction, modal=True):
+            await self.panel.client.show_game_search(interaction, str(self.query))
+
+
+class _CatalogChoice(ui.Select):
+    def __init__(self, panel):
+        self.panel = panel
+        super().__init__(
+            placeholder="Select the exact game",
+            options=[
+                discord.SelectOption(
+                    label=g["name"][:100],
+                    value=g["id"],
+                    description=g["description"][:100] or "Catalog game",
+                )
+                for g in panel.results
+            ],
+        )
+
+    async def callback(self, interaction):
+        if not await self.panel.authorized(interaction):
+            return
+        chosen = next((g for g in self.panel.results if g["id"] == self.values[0]), None)
+        if chosen is None:
+            await private_notice(
+                interaction, "That selection is no longer available. Search again."
+            )
+            return
+        data = dict(
+            self.panel.defaults, name=chosen["name"], catalog_id=chosen["id"], visibility="private"
+        )
+        await interaction.response.send_modal(GameModal(self.panel, data))
+
+
+class CatalogResultsPanel(ProfilePanel):
+    def __init__(self, *args, results, query="", defaults=None, **kwargs):
+        super().__init__(*args, screen="catalog", **kwargs)
+        self.results, self.defaults = results, (defaults or {})
+        self.clear_items()
+        items: list[Any] = [
+            ui.TextDisplay("## 🎮 Choose a game"),
+            ui.TextDisplay("Search: **" + clean(query or "Popular games", 100) + "**"),
+            ui.Separator(),
+        ]
+        if results:
+            items.append(ui.ActionRow(_CatalogChoice(self)))
+        else:
+            items.append(
+                ui.TextDisplay(
+                    "No matches. Try a shorter title or another official name. Nothing was saved."
+                )
+            )
+        items.extend(
+            [
+                ui.ActionRow(
+                    _Button("Search again", self.add_game, emoji="🔎"),
+                    _Button("Back to profile", self.home),
+                ),
+                ui.TextDisplay(
+                    "-# Catalog: Wikidata · Games are matched by ID, not spelling · Only you can see this"
+                ),
+            ]
+        )
+        self.add_item(ui.Container(*items, accent_colour=ACCENT))
+
+
 class BirthdayModal(_OwnedModal):
     def __init__(self, panel, data=None):
         super().__init__(panel, "Edit your birthday")
@@ -533,11 +636,11 @@ class GameModal(_OwnedModal):
     def __init__(self, panel, data=None):
         super().__init__(panel, "Save a game")
         data = data or {}
-        self.game_input = self.field(
-            "Game",
-            ui.TextInput(
-                default=data.get("name", ""), placeholder="League of Legends", max_length=80
-            ),
+        self.game_data = {k: v for k, v in data.items() if k in ("name", "catalog_id")}
+        self.add_item(
+            ui.TextDisplay(
+                "**" + clean(data.get("name", "Select a catalog game first"), 200) + "**"
+            )
         )
         self.role_input = self.field(
             "Preferred role (optional)",
@@ -564,7 +667,7 @@ class GameModal(_OwnedModal):
             interaction,
             "game",
             dict(
-                name=str(self.game_input),
+                **self.game_data,
                 role=str(self.role_input),
                 style=self.style_input.values[0],
                 visibility=self.sharing_input.values[0],

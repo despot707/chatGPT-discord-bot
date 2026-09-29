@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from src.aclient import DiscordClient as BaseDiscordClient
+from src.catalog_client import CatalogClientMixin
 from src.config import BotConfig
 from src.profile_client import ProfileClientMixin
 from src.providers import ProviderManager
@@ -13,7 +14,7 @@ from src.runtime_storage import prepare_runtime_storage
 logger = logging.getLogger(__name__)
 
 
-class DiscordClient(ProfileClientMixin, BaseDiscordClient):
+class DiscordClient(CatalogClientMixin, ProfileClientMixin, BaseDiscordClient):
     """Chat/gaming bot with private, member-entered settings instead of passive profiles."""
 
 

@@ -48,3 +48,7 @@ birthday announcements, external OAuth account linking, billing, and full legal 
 platform approval are not provided by this release. “Private” refers to visibility
 to other server members, not invisibility from Discord, hosting or AI processors.
 No encryption-at-rest or blanket security guarantee is implied by the interface.
+
+Game names now come from the canonical catalog, not free-typed profile fields.
+Use `/addgame` for live autocomplete or the profile's private search/select flow.
+See `catalog-context-branding.md` for identity-based matching and context behavior.

@@ -421,7 +421,10 @@ class DiscordClient(discord.Client):
                     "content": self.config.system_prompt
                     + f"\n\nCurrent date (UTC): {datetime.now(timezone.utc).date().isoformat()}"
                     + "\n\n"
-                    + persona_prompt,
+                    + persona_prompt
+                    + "\nFor short follow-up questions, resolve references such as 'that' or 'the difference' "
+                    "from the supplied recent conversation and reply target. Use both member messages and bot answers. "
+                    "Ask for clarification only when the relevant context is missing or genuinely ambiguous; do not invent it.",
                 }
             ]
             if use_private or include_shared_history:
@@ -606,7 +609,7 @@ class DiscordClient(discord.Client):
             image: discord.Attachment | None = None,
             use_web: bool = False,
             reason: bool = False,
-            context_messages: app_commands.Range[int, 0, 20] = 0,
+            context_messages: app_commands.Range[int, 0, 20] | None = None,
         ):
             await self._chat_interaction(
                 interaction,
@@ -916,7 +919,7 @@ class DiscordClient(discord.Client):
         image: discord.Attachment | None = None,
         use_web: bool = False,
         reasoning_requested: bool = False,
-        context_messages: int = 0,
+        context_messages: int | None = None,
     ) -> None:
         scope = self._scope(interaction)
         if not self.allowed(scope):
@@ -945,6 +948,15 @@ class DiscordClient(discord.Client):
             return
         private = settings.private
         settings_snapshot = (settings.provider, settings.model, settings.persona)
+        if context_messages is None:
+            context_messages = (
+                min(self.config.automatic_context_count, 20)
+                if (
+                    self.config.enable_message_content
+                    and self._can_read_channel(interaction.channel, interaction.user)
+                )
+                else 0
+            )
         if context_messages and not self.config.enable_message_content:
             await interaction.response.send_message(
                 "Discord message content access is disabled in bot configuration.",
@@ -1088,11 +1100,12 @@ class DiscordClient(discord.Client):
             raise BotRequestError(
                 "Both you and the bot need View Channel and Read Message History permissions to use channel context."
             )
+        header = "Recent channel conversation (oldest to newest):\n"
         recent: list[str] = []
-        total = 0
+        total = len(header)
         try:
             async for item in channel.history(limit=count, before=before, oldest_first=False):
-                if item.author.bot or getattr(item, "webhook_id", None):
+                if getattr(item, "webhook_id", None):
                     continue
                 content = serialize_message(item, max_chars=1200)
                 if not content:
@@ -1114,7 +1127,8 @@ class DiscordClient(discord.Client):
             raise BotRequestError(
                 "Discord could not load this channel's recent messages."
             ) from None
-        return "\n".join(reversed(recent))
+        logger.info("Recent channel context loaded: messages=%s chars=%s", len(recent), total)
+        return header + "\n".join(reversed(recent))
 
     def _format_sources(self, sources: list[WebSource]) -> str:
         if not sources:

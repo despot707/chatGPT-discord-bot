@@ -18,6 +18,7 @@ RUN python -m pip install --upgrade pip \
 COPY --chown=botuser:botuser main.py system_prompt.txt LICENSE ./
 COPY --chown=botuser:botuser src/ ./src/
 COPY --chown=botuser:botuser utils/ ./utils/
+COPY --chown=botuser:botuser assets/ ./assets/
 
 USER botuser
 
