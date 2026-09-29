@@ -24,6 +24,7 @@ jobs:
         run: python scripts/profile_upgrade_cleanup.py
       - name: Apply safe lint fixes and repository formatting
         run: |
+          ruff format .
           ruff check --fix .
           ruff format .
       - name: Commit isolated repairs without force
