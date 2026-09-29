@@ -10,12 +10,15 @@ from __future__ import annotations
 import logging
 import os
 import stat
+import sys
 
 logger = logging.getLogger(__name__)
 
 
 def prepare_runtime_storage(mount_path: str | None = None) -> bool:
     """Fix this app's SQLite volume, then drop to botuser (10001:10001)."""
+    if sys.platform == "win32":
+        return False
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         return False
     path = mount_path or os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
