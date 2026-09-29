@@ -2,19 +2,20 @@ name: Build public game catalog
 on:
   push:
     branches: [codex/catalog-context-icons-20260928]
-    paths: [.github/workflows/catalog-data.yml]
+    paths: [.github/workflows/catalog-data.yml, scripts/build_game_catalog.py]
 permissions:
   contents: write
 jobs:
   catalog:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Import and validate public catalog
-        run: python scripts/build_game_catalog.py
+        run: python -u scripts/build_game_catalog.py
       - name: Format catalog builder
         run: |
           python -m pip install ruff==0.16.9
