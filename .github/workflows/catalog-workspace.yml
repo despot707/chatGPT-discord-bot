@@ -1,0 +1,26 @@
+name: Catalog workspace snapshot
+on:
+  push:
+    branches: [codex/catalog-context-icons-20260928]
+    paths: [.github/workflows/catalog-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Prepare offline verification workspace
+        run: |
+          mkdir -p /tmp/catalog-workspace/wheels
+          git archive HEAD | tar -x -C /tmp/catalog-workspace
+          python -m pip download -r requirements-dev.txt --dest /tmp/catalog-workspace/wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog-workspace
+          path: /tmp/catalog-workspace/
+          include-hidden-files: true
+          retention-days: 1
