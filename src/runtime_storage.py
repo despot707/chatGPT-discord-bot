@@ -2,7 +2,7 @@
 
 Railway mounts volumes as root; RAILWAY_RUN_UID=0 permits this startup-only
 repair. The Discord/LLM clients still run as the image's unprivileged bot user.
-No recursive chown, symlink traversal, world-writable chmod, or data deletion.
+No recursive chown, symlink traversal, or world-writable chmod. Obsolete legacy-memory files are removed only when the feature is explicitly disabled.
 """
 
 from __future__ import annotations
@@ -31,8 +31,26 @@ def prepare_runtime_storage(mount_path: str | None = None) -> bool:
     try:
         os.fchown(fd, 10001, 10001)
         os.fchmod(fd, stat.S_IMODE(os.fstat(fd).st_mode) | 0o700)
+        long_term_enabled = os.environ.get("ENABLE_LONG_TERM_MEMORY", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        legacy_memory_names = {
+            "memory.sqlite3",
+            "memory.sqlite3-wal",
+            "memory.sqlite3-shm",
+            "memory.sqlite3-journal",
+        }
         for entry in os.scandir(fd):
-            if entry.is_file(follow_symlinks=False) and any(
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            if not long_term_enabled and entry.name in legacy_memory_names:
+                os.unlink(entry.name, dir_fd=fd)
+                logger.info("Removed obsolete disabled long-term-memory storage: %s", entry.name)
+                continue
+            if any(
                 entry.name.endswith(suffix)
                 for suffix in (".sqlite3", ".sqlite3-wal", ".sqlite3-shm", ".sqlite3-journal")
             ):
