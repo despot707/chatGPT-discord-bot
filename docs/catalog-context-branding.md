@@ -9,10 +9,12 @@ private search form, then a short results selector. Modals do not provide live
 keystroke autocomplete; use `/addgame` for that experience. Selecting a game opens
 its settings/confirmation without an editable title field.
 
-The catalog is a packaged snapshot of Wikidata's CC0 video-game records with
-English labels/descriptions, indexed locally with SQLite FTS5. See
-`assets/game_catalog_source.json` for source date and actual record count. It
-covers multiple platforms, not only Steam; it is not a guarantee of every game,
+The packaged catalog contains **175,130 titles** in this release. It is a snapshot
+of Wikidata's CC0 video-game records with English labels, multilingual/default
+label fallback, and English descriptions, indexed locally with SQLite FTS5. See
+`assets/game_catalog_source.json` for the source timestamp. The import and actual
+search checks include League of Legends, World of Warcraft, and Super Mario Bros.
+It covers multiple platforms, not only Steam; it is not a guarantee of every game,
 new release, edition, DLC, or platform-specific variant. The importer can refresh
 the snapshot without changing saved item IDs. It does not import game accounts,
 member libraries, passwords, tokens, or Discord message histories.
