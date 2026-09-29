@@ -112,7 +112,9 @@ async def test_settings_are_per_user_channel_and_provider_snapshot_is_used():
     await task
     messages, model, _ = manager.provider.calls[-1]
     assert model == "chosen-model"
-    assert "enhanced creative capabilities" in messages[0]["content"]
+    from src.personas import PERSONAS
+
+    assert PERSONAS["creative"] in messages[0]["content"]
 
 
 def test_expired_scope_restores_private_default():

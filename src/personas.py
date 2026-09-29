@@ -33,8 +33,15 @@ def is_jailbreak_persona(persona_name: str) -> bool:
 
 
 def is_admin_user(user_id=None) -> bool:
-    """Legacy compatibility; authorization is enforced by DiscordClient/config."""
-    return False
+    """Read configured admin identities without changing available personalities."""
+    import os
+
+    if user_id is None:
+        return False
+    configured = os.getenv("BOT_ADMIN_IDS")
+    if configured is None:
+        configured = os.getenv("ADMIN_USER_IDS", "")
+    return str(user_id).strip() in {v.strip() for v in configured.split(",") if v.strip()}
 
 
 def get_available_personas(user_id=None) -> list[str]:

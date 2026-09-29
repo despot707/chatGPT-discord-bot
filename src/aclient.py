@@ -22,8 +22,8 @@ from src import personas
 from src.budget import BudgetError
 from src.chat_store import ChatStore
 from src.config import BotConfig
-from src.message_context import serialize_message
 from src.memory_store import MemoryStore
+from src.message_context import serialize_message
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.request_intent import parse_request_intent
 from src.web import WebError, WebService, WebSource
@@ -178,7 +178,9 @@ class DiscordClient(discord.Client):
             return ""
         try:
             rows = store.relevant(
-                guild_id, query, user_ids=user_ids,
+                guild_id,
+                query,
+                user_ids=user_ids,
                 limit=getattr(self.config, "memory_context_items", 12),
             )
             birthdays = store.birthday_summary(guild_id, user_ids=user_ids)
@@ -1329,7 +1331,8 @@ class DiscordClient(discord.Client):
                 )
                 if re.search(r"\b(?:happy\s+(?:birthday|bday)|hbd)\b", raw_content, re.I):
                     targets = [
-                        member for member in getattr(message, "mentions", ())
+                        member
+                        for member in getattr(message, "mentions", ())
                         if member.id != self.user.id and not getattr(member, "bot", False)
                     ]
                     if len(targets) == 1:
@@ -1338,8 +1341,12 @@ class DiscordClient(discord.Client):
                             subject_user_id=targets[0].id,
                             observer_user_id=message.author.id,
                             message_id=message.id,
-                            month=created.month if created is not None else datetime.now(timezone.utc).month,
-                            day=created.day if created is not None else datetime.now(timezone.utc).day,
+                            month=created.month
+                            if created is not None
+                            else datetime.now(timezone.utc).month,
+                            day=created.day
+                            if created is not None
+                            else datetime.now(timezone.utc).day,
                             created_at=stamp,
                         )
             except (OSError, ValueError, RuntimeError, sqlite3.Error):
@@ -1525,7 +1532,8 @@ class DiscordClient(discord.Client):
             if guild is not None:
                 relevant_users = {message.author.id}
                 relevant_users.update(
-                    member.id for member in getattr(message, "mentions", ())
+                    member.id
+                    for member in getattr(message, "mentions", ())
                     if not getattr(member, "bot", False)
                 )
                 memory_context = self._memory_context(

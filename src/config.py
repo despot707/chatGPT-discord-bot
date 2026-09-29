@@ -89,7 +89,7 @@ class BotConfig:
     system_prompt: str = "You are a helpful assistant."
     steam_api_key: Optional[str] = field(default=None, repr=False)
     gaming_database_path: str = "data/gaming.sqlite3"
-    enable_long_term_memory: bool = True
+    enable_long_term_memory: bool = False
     memory_database_path: str = "data/memory.sqlite3"
     memory_context_items: int = 12
 
@@ -174,7 +174,7 @@ class BotConfig:
                 steam_api_key=env.get("STEAM_API_KEY", "").strip() or None,
                 gaming_database_path=env.get("GAMING_DATABASE_PATH", "").strip()
                 or "data/gaming.sqlite3",
-                enable_long_term_memory=_bool(env, "ENABLE_LONG_TERM_MEMORY", default=True),
+                enable_long_term_memory=_bool(env, "ENABLE_LONG_TERM_MEMORY", default=False),
                 memory_database_path=env.get("MEMORY_DATABASE_PATH", "").strip()
                 or "data/memory.sqlite3",
                 memory_context_items=_int(env, "MEMORY_CONTEXT_ITEMS", 12, minimum=1),
