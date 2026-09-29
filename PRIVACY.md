@@ -60,4 +60,4 @@ This policy may change as the Service changes or legal/platform requirements cha
 
 ## Contact
 
-Privacy questions, correction requests, or deletion problems can be raised through the Service's Discord support/contact method shown in the application profile. The application owner should configure a durable public support contact in the Discord Developer Portal before commercial launch.
+Privacy questions, correction requests, or deletion problems can be raised through the in-app privacy controls. For support problems that cannot be resolved in-app, open a support issue at https://github.com/despot707/chatGPT-discord-bot/issues and do not include passwords, tokens, private message content, or other sensitive information in a public issue.
