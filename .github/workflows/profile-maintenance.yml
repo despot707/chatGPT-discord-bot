@@ -1,0 +1,52 @@
+name: One-time isolated profile maintenance
+on:
+  push:
+    branches: [codex/private-profile-20260928]
+    paths: [scripts/profile_upgrade_cleanup.py, .github/workflows/profile-maintenance.yml]
+permissions:
+  contents: write
+concurrency:
+  group: private-profile-maintenance
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'despot707/chatGPT-discord-bot' && github.ref == 'refs/heads/codex/private-profile-20260928'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/private-profile-20260928
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Apply assertion-guarded repairs
+        run: python scripts/profile_upgrade_cleanup.py
+      - name: Apply safe lint fixes and repository formatting
+        run: |
+          ruff check --fix .
+          ruff format .
+      - name: Commit isolated repairs without force
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests scripts
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: repair legacy profile regressions and normalize Python formatting'
+            git push origin HEAD:refs/heads/codex/private-profile-20260928
+          fi
+          echo "Verified working commit: $(git rev-parse HEAD)"
+      - name: Lint and formatting
+        if: always()
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Type check
+        if: always()
+        run: mypy src main.py utils
+      - name: Entire test suite
+        if: always()
+        run: pytest -q
+      - name: Compile
+        if: always()
+        run: python -m compileall -q src main.py tests
