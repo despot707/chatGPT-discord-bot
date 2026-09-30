@@ -12,7 +12,15 @@ DISCORD_APPLICATION_ID=1365724363722068120
 DISCORD_SKU_MAP=
 ```
 
-The application ID is Sidecord Ai's public Discord application ID. Obtain actual guild-subscription SKU IDs from the Developer Portal after Discord monetization setup. Never put example IDs in the live map, infer a product from a name or price, or treat a test SKU as a paid product. The map format is a comma-separated set of `SKU_ID:product` pairs; supported products are `basic`, `plus`, and `premium` only.
+The application ID is Sidecord Ai's public Discord application ID. Draft monthly USD guild-subscription SKUs created September 30, 2026 are:
+
+| Product | Draft SKU ID | Interval | Currency |
+|---|---:|---|---|
+| Basic | `1554920142532513832` | Monthly | USD |
+| Plus | `1554920641088593990` | Monthly | USD |
+| Premium | `1554920977488551936` | Monthly | USD |
+
+These SKUs are unpublished and not approved for sale. Artwork upload is pending browser file-URL permission. Checkout remains unpublished; provider-contract and financial-settlement validation are still required. The corresponding comma-separated map syntax is `1554920142532513832:basic,1554920641088593990:plus,1554920977488551936:premium`; document it only, and do not place it in the live environment or enable purchase modes/approval flags. Supported products are `basic`, `plus`, and `premium` only.
 
 `off` disables purchase polling and keeps the personal bot path. `observe` requires a numeric application ID and nonempty SKU map, fetches Discord's SKU, entitlement, and subscription records, and records current access without granting credits. `enforce` performs the same complete REST reconciliation and may apply only reviewed paid-period settlements. It also requires `PREPAID_MODE=enforce`, a recent complete snapshot, and every existing approval and cost-evidence gate described in [prepaid plans](prepaid-plans.md). Leave approvals false until their evidence has been independently verified. Do not enable enforcement as a test or to try a guessed SKU.
 
@@ -40,17 +48,17 @@ Create a record JSON file with these exact fields. `starts` and `ends` are Unix 
   "entitlement_id": 123456789012345678,
   "subscription_id": 123456789012345678,
   "guild_id": 123456789012345678,
-  "sku_id": 123456789012345678,
+  "sku_id": 1554920142532513832,
   "product": "basic",
   "starts": 1780000000,
   "ends": 1782592000,
-  "gross_micros": 990000,
-  "net_micros": 643500,
+  "gross_micros": 1990000,
+  "net_micros": 1293500,
   "currency": "USD"
 }
 ```
 
-The values above are illustrative only and are not a real purchase, payout, entitlement, SKU, or invoice. Replace every value with independently verified evidence. The importer validates field consistency and records who reviewed the evidence; it cannot validate the external source or whether the review was correct.
+The amounts above show the $1.99 Basic gross and exactly the 65% minimum accepted net; they are illustrative only, not an actual purchase or payout. The SKU ID is the draft Basic SKU, which remains unpublished; the remaining identity/period values are placeholders, not real settlement evidence. Replace every value with independently verified evidence. The importer validates field consistency and records who reviewed the evidence; it cannot validate the external source or whether the review was correct.
 
 After review, run the explicit operator import command from the repository root:
 

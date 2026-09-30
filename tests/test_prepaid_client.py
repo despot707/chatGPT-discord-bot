@@ -13,7 +13,8 @@ from tests.test_bot import Manager, interaction
 def test_plan_ui_is_finite_and_has_no_checkout():
     data = plan_embed().to_dict()
     assert "not enabled" in data["description"]
-    assert "Basic · $0.99/month" in [f["name"] for f in data["fields"]]
+    assert "Basic · $1.99/month" in [f["name"] for f in data["fields"]]
+    assert any("400 chat attempts" in f["value"] for f in data["fields"])
     assert len(data["fields"]) == 4
     assert "Profiles" in data["fields"][0]["value"]
     assert all("server operations" not in f["value"] for f in data["fields"])

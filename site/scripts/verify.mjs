@@ -62,9 +62,9 @@ check(privacyPage.includes(`href="${config.supportUrl}"`) && termsPage.includes(
 
 const pricing = await read(path.join(repo, config.pricing.source));
 const plansPage = await read(path.join(out, 'plans/index.html'));
-for (const value of ['$0.99', '$4.99', '$9.99', '100', '500', '1000', '50', '100', '10', '20', '3']) check(plansPage.includes(value), `plan preview includes unchanged AI price/allowance ${value}`);
+for (const value of ['$1.99', '$4.99', '$9.99', '400', '500', '1000', '50', '100', '10', '20', '3']) check(plansPage.includes(value), `plan preview includes proposed AI price/allowance ${value}`);
 for (const value of ['ongoing free tier', 'no free AI credit', 'Basic begins paid AI access', '8,000 input tokens', '500 total output tokens', '2,000 total output tokens', 'including hidden reasoning', 'not available for purchase yet', 'no purchase or charge can occur', 'no overage charges or automatic refills']) check(plansPage.toLowerCase().includes(value.toLowerCase()), `plan page explains ${value}`);
-check(!plansPage.includes('Server operations') && !plansPage.includes('Saved data') && !plansPage.includes('Optional add-ons') && !plansPage.includes('$1.99') && !plansPage.includes('$2.99'), 'public plans omit core counts and unsupported add-on offers');
+check(!plansPage.includes('Server operations') && !plansPage.includes('Saved data') && !plansPage.includes('Optional add-ons') && !plansPage.includes('Extra chat') && !plansPage.includes('Storage boost'), 'public plans omit core counts and unsupported add-on offers');
 check(pricing.includes('AI purchases are not enabled'), 'source plan status confirms AI purchases are disabled');
 check(plansPage.toLowerCase().includes('not available for purchase yet') && plansPage.toLowerCase().includes('no purchase or charge can occur'), 'plan page clearly keeps AI sales disabled');
 

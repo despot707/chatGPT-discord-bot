@@ -1,7 +1,7 @@
 # Prepared plans and cost controls
 
-**Status: implemented preparation branch; AI purchases are not enabled. No approved SKUs, live checkout, or supported add-ons are configured.**
-Prices and finite AI allowances below are unchanged planning values in USD per server, excluding any separately collected taxes. They are not offers for sale. No purchase can be made and no automatic charge occurs. Review the owner-facing boundaries in [commercial-launch.md](commercial-launch.md) before launch.
+**Status: implemented preparation branch; AI purchases are not enabled. Draft monthly USD guild-subscription SKUs were created September 30, 2026 for Basic (`1554920142532513832`), Plus (`1554920641088593990`), and Premium (`1554920977488551936`). They are not approved or published for sale. Artwork upload is pending browser file-URL permission; checkout remains unpublished, and provider-contract and financial-settlement validation are still required. No supported add-ons are configured.**
+Prices and finite AI allowances below are proposed values in USD per server, excluding any separately collected taxes. They are not offers for sale. No purchase can be made and no automatic charge occurs. Review the owner-facing boundaries in [commercial-launch.md](commercial-launch.md) before launch.
 
 ## Free tier and paid boundary
 
@@ -13,13 +13,13 @@ The lowest paid plan begins AI access. Paid AI features are chat, advanced reaso
 
 | Plan | Monthly price | Chat attempts | Reasoning attempts | Web searches | Image attempts | Server operations | Saved data |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Basic | $0.99 | 100 | 0 | 0 | 0 | 1000 | 1 MiB |
+| Basic | $1.99 | 400 | 0 | 0 | 0 | 1000 | 1 MiB |
 | Plus | $4.99 | 500 | 50 | 10 | 3 | 5000 | 20 MiB |
 | Premium | $9.99 | 1000 | 100 | 20 | 10 | 10000 | 100 MiB |
 
 ## Unsupported add-ons (internal planning only; not for sale)
 
-These proposed items have no approved SKUs or supported checkout and must not appear as purchasable offers. Keep their values here only for internal cost/control planning.
+These proposed items have no SKUs or supported checkout and must not appear as purchasable offers. Keep their values here only for internal cost/control planning.
 
 | Add-on | One-time price | Additional allowance |
 |---|---:|---|
@@ -47,7 +47,7 @@ Each accepted full-price receipt must provide at least 65% of its listed gross p
 
 | Product | Gross | Max AI liability | Hosting allocation | Remainder with 35% fee reserve |
 |---|---:|---:|---:|---:|
-| Basic | $0.99 | $0.1500 | $0.0990 | $0.3945 |
+| Basic | $1.99 | $0.6000 | $0.1990 | $0.4945 |
 | Plus | $4.99 | $1.5400 | $0.4990 | $1.2045 |
 | Premium | $9.99 | $3.4000 | $0.9990 | $2.0945 |
 | Extra chat | $0.99 | $0.3000 | $0.0990 | $0.2445 |
@@ -93,7 +93,7 @@ railway usage limit set --target agent --hard 0
 ```
 Configure and enforce an OpenAI project hard-spend limit separately. API enforcement may lag; the application reservations are the first line of defense, not provider dashboard alerts. Account for existing month spend, meter lag, retries outside this application, minimum subscription charges, backups, residual idle storage and any unrelated project usage. No runtime uses Railway Agent for customer conversations.
 
-The activation gate requires prepaid infrastructure allocation plus explicitly budgeted operator startup funds to cover the greater of documented hosting liability or 110% of the configured compute+Agent caps. For a $10 compute cap and $0 Agent cap, that is $11. With no operator funds and only Basic subscriptions, the conservative 10% allocation reaches $11 at 112 active Basic customers. This is a safety funding threshold, NOT a forecast or a claim that hosting actually costs $11.
+The activation gate requires prepaid infrastructure allocation plus explicitly budgeted operator startup funds to cover the greater of documented hosting liability or 110% of the configured compute+Agent caps. For a $10 compute cap and $0 Agent cap, that is $11. With no operator funds and only Basic subscriptions, the conservative 10% allocation reaches $11 at 56 active Basic subscriptions ($0.199 hosting allocation each). This is a safety funding threshold, NOT a forecast or a claim that hosting actually costs $11. Basic's illustrative remainder after the same 35% fee reserve, planned maximum AI liability, and 10% hosting allocation is $0.4945, up from $0.3945 under the prior $0.99/100-chat proposal. This arithmetic is not a guarantee of profit; it excludes taxes, refunds, chargebacks, labor and other business overhead.
 
 Validate native caps and metering with screenshots/API evidence, current invoices and a restore/delete exercise; record no secrets in the repository. Verify provider contracts and run actual low-cost account smoke tests before marking review flags true. The current preparation has only offline/mocked API tests; it does not spend the user’s production OpenAI balance on testing.
 

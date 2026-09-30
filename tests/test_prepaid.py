@@ -35,7 +35,9 @@ def payment(receipt="sale1", guild=1, product="basic", **kwargs):
 
 
 def test_price_floor_and_maximum_costs():
-    assert PRODUCTS["basic"].price_cents == 99
+    assert PRODUCTS["basic"].price_cents == 199
+    assert PRODUCTS["basic"].allowances["chat"] == 400
+    assert PRODUCTS["basic"].max_api_cost == 600_000
     validate_products()
     for p in PRODUCTS.values():
         assert p.price_cents >= 99
@@ -57,6 +59,13 @@ def test_receipt_replay_cannot_multiply_or_move_credit(ledger):
     with pytest.raises(Denied):
         ledger.credit(payment(guild=2))
     assert ledger.summary(1)["remaining"]["chat"] == PRODUCTS["basic"].allowances["chat"]
+
+
+def test_old_basic_price_cannot_fund_new_allowance(ledger):
+    with pytest.raises(Denied):
+        ledger.credit(payment(gross_micros=990000, net_micros=643500))
+    with pytest.raises(Denied):
+        ledger.reserve(1, 2, "chat")
 
 
 @pytest.mark.parametrize(
@@ -107,7 +116,7 @@ def test_parallel_requests_never_overdraw(ledger):
             return None
 
     with ThreadPoolExecutor(max_workers=16) as pool:
-        result = list(pool.map(attempt, range(150)))
+        result = list(pool.map(attempt, range(500)))
     assert sum(r is not None for r in result) == PRODUCTS["basic"].allowances["chat"]
     assert ledger.summary(1)["remaining"]["chat"] == 0
 

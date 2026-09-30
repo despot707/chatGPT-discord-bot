@@ -20,8 +20,8 @@ def _record(**updates):
         "product": "basic",
         "starts": now - 60,
         "ends": now + 30 * 86400,
-        "gross_micros": 990000,
-        "net_micros": 643500,
+        "gross_micros": 1990000,
+        "net_micros": 1293500,
         "currency": "USD",
     }
     result.update(updates)
@@ -140,14 +140,14 @@ def test_cli_replay_is_idempotent_but_changed_receipt_facts_are_denied(
     assert _invoke(tmp_path, monkeypatch, record)[0] == 0
     assert "already staged unchanged" in capsys.readouterr().out
 
-    changed = {**record, "net_micros": 650000}
+    changed = {**record, "net_micros": 1400000}
     with pytest.raises(SystemExit) as error:
         _invoke(tmp_path, monkeypatch, changed)
     assert error.value.code == 2
     with sqlite3.connect(first[1]) as db:
         rows = db.execute("SELECT facts FROM discord_purchase_settlement").fetchall()
     assert len(rows) == 1
-    assert json.loads(rows[0][0])["net_micros"] == 643500
+    assert json.loads(rows[0][0])["net_micros"] == 1293500
 
 
 def test_purchase_config_defaults_off_and_validates_mode_and_observe_requirements():

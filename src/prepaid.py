@@ -107,7 +107,7 @@ class Product:
 
 
 PRODUCTS = {
-    "basic": Product("Basic", 99, "subscription", {"chat": 100, "core": 1000}, 1 * MIB),
+    "basic": Product("Basic", 199, "subscription", {"chat": 400, "core": 1000}, 1 * MIB),
     "plus": Product(
         "Plus",
         499,
