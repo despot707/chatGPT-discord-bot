@@ -19,7 +19,12 @@ def test_plan_ui_is_finite_and_has_no_checkout():
     assert len(data["fields"]) == 4
     assert "Profiles" in data["fields"][0]["value"]
     assert "no trial or free ai credits" in data["fields"][0]["value"].lower()
-    assert "daily availability limits also apply" in data["footer"]["text"].lower()
+    footer = data["footer"]["text"].lower()
+    assert "discord renews automatically unless cancelled" in footer
+    assert "verified billing-period renewal refreshes the shared allowance once" in footer
+    assert "continue through the current paid period" in footer
+    assert "no rollover or usage overages" in footer
+    assert "daily availability limits" not in footer
     assert all("server operations" not in f["value"] for f in data["fields"])
     assert sum(len(f["value"]) for f in data["fields"]) < 5000
     assert plan_view(None) is None

@@ -41,12 +41,20 @@ The LNCCX type-1/null-end purchase fix is integrated. Verification included 544 
 - Discord Discovery requires a Community support server. Its selector had no eligible server; summary/language/description are prepared but not saved because the required server is absent.
 - Custom SKU artwork was not uploaded because the browser extension's file-upload permission is unavailable. Discord's default product artwork is live.
 
-No manual invoice, assumed net revenue, or fabricated approval JSON is required for native Discord service access. Financial records remain separate. The global cap protects this bot's calls from activation onward; unrelated use of the API key is outside this ledger.
+No manual invoice, assumed net revenue, or fabricated approval JSON is required for native Discord service access. Financial records remain separate. Unrelated use of the API key is outside this bot's accounting.
+
+## Subscription continuity update
+
+The owner's later funding instructions replace the shared personal $10 ceiling and daily slices for native paid subscriptions. The owner bridges costs while Discord payouts are pending; $100 is a planning baseline, not a cutoff. Finite plan allowances and conservative per-request cost reservations remain required. The original publication above records the earlier policy, not the new admission behavior.
+
+The continuity source integrates LNCCX's [paid accounting migration](paid-budget-continuity.md) and [period identity fix](discord-period-identity.md). Migration preserves the existing budget and prepaid databases, creates a verified backup, and binds the accounting ledgers without resetting spending or unresolved reservations. Corrected end dates update the existing allowance; authenticated new billing periods grant once. Upgrade, downgrade, renewal, replay, restart, and refund regressions are included.
+
+Release completion requires Linux migration checks, exact-revision deployment verification, migration-record and accounting conservation checks, and a live Discord subscription. The prepared team-owner Basic checkout for The Mancave shows $0 today and $0 per month; final acceptance awaits the owner. A discounted live subscription can verify access and lifecycle, not collected revenue or payout.
 
 ## Interface references and boundaries
 
 [Dyno](https://dyno.gg/) separates its command/help navigation from Premium. [Discord Bot List](https://discordbotlist.com/) presents a direct Add Bot action and short, specific feature descriptions. Sidecord follows those useful patterns with a direct invite, a concise free-tools section, separate AI plans, and private `/plans` and `/usage` views.
 
-Free features are profiles, local game discovery, parties, and team building. Paid features are AI chat, image understanding, explicit reasoning, available web lookups, and explicit image generation. Voice, image editing, external file hosting, and Steam-library import are not advertised as included. Regular errors remain generic; plan pages disclose finite monthly allowances and daily availability.
+Free features are profiles, local game discovery, parties, and team building. Paid features are AI chat, image understanding, explicit reasoning, available web lookups, and explicit image generation. Voice, image editing, external file hosting, and Steam-library import are not advertised as included. Regular errors remain generic; updated plan pages disclose finite allowances for the actual subscription billing period and automatic renewal without rollover or overage charges.
 
 [Top.gg submissions](https://support.top.gg/hc/en-us/articles/23135162935708-How-to-Add-Your-Bot) require an online public bot and staff review. Directory OAuth authorizations are separate from Discord's own application settings. Pending authorizations or external reviews must be identified without claiming a public listing.

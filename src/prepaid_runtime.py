@@ -7,18 +7,20 @@ Preview never converts Discord test entitlements to money or changes production.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import threading
 import time
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Callable
+from typing import IO, Callable
 
 from src.ai_access import ai_disabled, parse_ai_access_mode
-from src.budget import BudgetLedger
-from src.prepaid import FREE_STORAGE_BYTES, Denied, Ledger, integer
+from src.budget import BudgetLedger, PaidBudgetLedger
+from src.prepaid import COSTS, FREE_STORAGE_BYTES, Denied, Ledger, integer
 from src.prepaid_gateway import Gateway
 
 SCOPE: ContextVar[tuple[int, int, int] | None] = ContextVar("paid_scope", default=None)
@@ -42,6 +44,7 @@ class Runtime:
         self.clock = clock
         self.gateway: Gateway | None = None
         self._budget: BudgetLedger | None = None
+        self._lease: IO[str] | None = None
         self._recent: dict[tuple[int, int], float] = {}
         self._housekeeping: dict[int, float] = {}
         self._housekeeping_global: tuple[float, int] = (0, 0)
@@ -98,8 +101,9 @@ class Runtime:
         )
         if funding_mode() == "entitlement":
             # Discord authorizes service access. It does not prove a payout.
-            # Owner-funded requests remain bounded by the existing shared cap.
+            # Owner covers the payout gap; finite sold units authorize spending.
             self.global_budget()
+            self._log_planning_report()
             return
         data = self.evidence()
         for key in (
@@ -133,8 +137,197 @@ class Runtime:
             from src.providers import ProviderManager
 
             policy, path, opening = ProviderManager.budget_settings(os.environ)
-            self._budget = BudgetLedger(policy, path, opening_month_spend_micros=opening)
+            from src.discord_purchases import funding_mode
+
+            if enforcing() and funding_mode() == "entitlement":
+                self.acquire_process()
+                assert self._lease is not None
+                self._budget = PaidBudgetLedger(
+                    policy,
+                    path,
+                    opening,
+                    ledger=self.ledger,
+                    writer_lease=self._lease,
+                    clock=lambda: datetime.fromtimestamp(self.clock(), timezone.utc),
+                )
+            else:
+                self._budget = BudgetLedger(policy, path, opening_month_spend_micros=opening)
         return self._budget
+
+    def planning_report(self, *, hosting_micros: int | None = None) -> dict:
+        """Private operator report. Never use this projection for admission.
+
+        Not exposed through guild-admin commands. Logs contain aggregate costs,
+        no customer identities. Hosting unknown stays unknown, never guessed zero.
+        """
+        if hosting_micros is not None:
+            integer(hosting_micros)
+        budget = self.global_budget()
+        if not isinstance(budget, PaidBudgetLedger):
+            raise Denied("Commercial planning requires the paid accounting policy.")
+        snapshot = budget.snapshot()
+        with self.ledger.db() as db:
+            grants = db.execute(
+                "SELECT receipt,limits FROM prepaid_grants "
+                "WHERE revoked=0 AND starts<=? AND ends>?",
+                (self.clock(), self.clock()),
+            ).fetchall()
+            remaining = 0
+            for grant in grants:
+                for feature, limit in json.loads(grant["limits"]).items():
+                    if feature == "core":
+                        continue
+                    used = db.execute(
+                        "SELECT COUNT(*) FROM prepaid_requests WHERE receipt=? "
+                        "AND feature=? AND state!='cancelled'",
+                        (grant["receipt"], feature),
+                    ).fetchone()[0]
+                    remaining += max(0, integer(limit) - used) * COSTS[feature]
+            pending = db.execute(
+                "SELECT id,reserved FROM prepaid_requests "
+                "WHERE state IN ('reserved','dispatched') AND feature!='core'"
+            ).fetchall()
+            with budget._connect() as cash:
+                linked = {r[0] for r in cash.execute("SELECT request_id FROM paid_budget_links")}
+                legacy_holds = cash.execute(
+                    "SELECT COALESCE(SUM(r.reserved_micros),0) FROM reservations r "
+                    "LEFT JOIN paid_budget_links l ON l.reservation_id=r.id "
+                    "WHERE r.status='pending' AND l.reservation_id IS NULL"
+                ).fetchone()[0]
+        unlinked_paid = sum(r["reserved"] for r in pending if r["id"] not in linked)
+        unresolved = integer(snapshot["reserved_micros"]) + unlinked_paid
+        incurred = integer(snapshot["monthly_spent_micros"])
+        known = bool(snapshot["cumulative_baseline_known"]) and hosting_micros is not None
+        planned = incurred + unresolved + remaining + hosting_micros if known else None
+        period = str(snapshot["as_of"])[:7]
+        expected_net = None
+        verified_payout_cash = None
+        finance_reviewed_at = None
+        finance_evidence_sha256 = None
+        finance_status = "missing"
+        raw_finance = os.getenv("PAID_FINANCE_EVIDENCE_JSON")
+        if raw_finance:
+            try:
+                if len(raw_finance.encode("utf-8")) > 8192:
+                    raise ValueError("Finance evidence is too large")
+                evidence = json.loads(raw_finance)
+                if not isinstance(evidence, dict):
+                    raise ValueError("Finance evidence must be an object")
+                import hashlib
+
+                finance_evidence_sha256 = hashlib.sha256(raw_finance.encode("utf-8")).hexdigest()
+                if evidence.get("period") != period:
+                    finance_status = "stale_period"
+                else:
+                    reviewed_at = integer(evidence.get("reviewed_at"), 1)
+                    reviewer = evidence.get("reviewed_by")
+                    if (
+                        not isinstance(reviewer, str)
+                        or not 1 <= len(reviewer.strip()) <= 120
+                        or not 0 <= self.clock() - reviewed_at <= 32 * 86400
+                    ):
+                        raise ValueError("Finance review provenance is invalid")
+                    for amount_key, source_key in (
+                        ("expected_net_micros", "expected_net_source"),
+                        ("verified_payout_cash_micros", "verified_payout_source"),
+                    ):
+                        amount = evidence.get(amount_key)
+                        source = evidence.get(source_key)
+                        if amount is not None:
+                            integer(amount)
+                            if not isinstance(source, str) or not 1 <= len(source.strip()) <= 300:
+                                raise ValueError("Finance amount has no reviewed source")
+                        elif source is not None:
+                            raise ValueError("Finance source has no amount")
+                    expected_net = evidence.get("expected_net_micros")
+                    verified_payout_cash = evidence.get("verified_payout_cash_micros")
+                    finance_reviewed_at = reviewed_at
+                    finance_status = "current"
+            except (TypeError, ValueError, Denied):
+                finance_status = "invalid"
+        missing_finance = [
+            name
+            for name, value in (
+                ("expected_net_micros", expected_net),
+                ("verified_payout_cash_micros", verified_payout_cash),
+            )
+            if value is None
+        ]
+        operating_gap = (
+            planned - expected_net if planned is not None and expected_net is not None else None
+        )
+        cash_bridge_gap = (
+            planned - verified_payout_cash
+            if planned is not None and verified_payout_cash is not None
+            else None
+        )
+        return {
+            "baseline_micros": 100_000_000,
+            "incurred_micros": incurred,
+            "unresolved_micros": unresolved,
+            "projection_type": "conservative_upper_bound",
+            "unlinked_paid_holds_micros": unlinked_paid,
+            "legacy_unlinked_global_holds_micros": legacy_holds,
+            "possible_legacy_hold_overlap": bool(unlinked_paid and legacy_holds),
+            "remaining_quota_micros": remaining,
+            "hosting_micros": hosting_micros,
+            "planned_micros": planned,
+            "warning": planned >= 100_000_000 if planned is not None else None,
+            "expected_net_micros": expected_net,
+            "verified_payout_cash_micros": verified_payout_cash,
+            "operating_gap_micros": operating_gap,
+            "cash_bridge_gap_micros": cash_bridge_gap,
+            "operating_shortfall": operating_gap > 0 if operating_gap is not None else None,
+            "cash_bridge_required": cash_bridge_gap > 0 if cash_bridge_gap is not None else None,
+            "finance_evidence_status": finance_status,
+            "finance_reviewed_at": finance_reviewed_at,
+            "finance_evidence_sha256": finance_evidence_sha256,
+            "finance_source": "operator_reviewed_monthly_evidence"
+            if finance_status == "current"
+            else "unknown",
+            "missing_finance_fields": missing_finance,
+            "financial_complete": known and not missing_finance,
+            "admission_paused": False,
+            "accounting_locked": snapshot["locked"],
+            "complete": known,
+            "cost_source": "current_month_including_conservative_late_settlements",
+            "cumulative_spent_micros": snapshot["cumulative_spent_micros"],
+            "period": period,
+            "as_of": snapshot["as_of"],
+            "funding_source": "owner_funded_discord_entitlement",
+            "hosting_source": "operator_configured" if hosting_micros is not None else "unknown",
+            "settled_receipts_micros": None,
+        }
+
+    def _log_planning_report(self) -> None:
+        now = self.clock()
+        if now - getattr(self, "_last_planning_log", float("-inf")) < 3600:
+            return
+        self._last_planning_log = now
+        logger = logging.getLogger(__name__)
+        try:
+            from src.providers import ProviderManager
+
+            hosting = ProviderManager._budget_usd_micros(
+                os.getenv("PAID_HOSTING_LIABILITY_USD"), "PAID_HOSTING_LIABILITY_USD"
+            )
+            report = self.planning_report(hosting_micros=hosting)
+            logger.log(
+                logging.WARNING
+                if (
+                    report["warning"] is not False
+                    or report["operating_shortfall"] is True
+                    or report["cash_bridge_required"] is True
+                    or not report["financial_complete"]
+                )
+                else logging.INFO,
+                "Paid planning report (alert only): %s",
+                json.dumps(report, sort_keys=True),
+            )
+        except Exception:
+            # Observability failure cannot revoke already-sold quota. Admission
+            # and accounting safety checks remain in the gateway independently.
+            logger.warning("Paid planning report unavailable; review operator accounting")
 
     def image_ready(self) -> bool:
         from src.discord_purchases import funding_mode
@@ -269,7 +462,11 @@ class PaidWeb:
         raise Denied("External image downloads are not an approved metered feature.")
 
     async def close(self):
-        await self.legacy.close()
+        # WebService owns each HTTP session inside its request context. Some
+        # adapters also have persistent resources; close those when available.
+        close = getattr(self.legacy, "close", None)
+        if close is not None:
+            await close()
 
 
 def storage_transaction(method):

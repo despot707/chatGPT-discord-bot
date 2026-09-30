@@ -11,7 +11,7 @@ import json
 import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Callable
 
@@ -519,39 +519,100 @@ class DiscordPurchases:
                     period_end,
                 )
             )
-        periods: dict[tuple[int, int, int, int, int], int] = {}
+        periods: dict[tuple[int, int], int] = {}
         for row in access:
-            period = (row.subscription_id, row.guild_id, row.sku_id, row.starts, row.ends)
+            period = (row.subscription_id, row.starts)
             previous = periods.setdefault(period, row.entitlement_id)
             if previous != row.entitlement_id:
                 raise Denied("Discord subscription period has conflicting entitlements.")
         return access, pending
 
+    def _access_history(
+        self, db: sqlite3.Connection
+    ) -> dict[tuple[str, int, int], set[AccessGrant]]:
+        """Validate retained accounting once before resolving any current cycle."""
+        history: dict[tuple[str, int, int], set[AccessGrant]] = {}
+        by_receipt = {}
+        try:
+            for period in db.execute("SELECT * FROM discord_access_period").fetchall():
+                grant = AccessGrant(**json.loads(period["payload"])["access"])
+                if (
+                    period["entitlement_id"] != grant.entitlement_id
+                    or period["starts"] != grant.starts
+                    or period["ends"] != grant.ends
+                    or period["receipt_id"] != grant.receipt_id
+                    or period["payload"] != self.ledger.access_payload(grant)
+                ):
+                    raise ValueError()
+                by_receipt[grant.receipt_id] = grant
+                for kind, identity in (
+                    ("entitlement", grant.entitlement_id),
+                    ("subscription", grant.subscription_id),
+                ):
+                    history.setdefault((kind, identity, grant.starts), set()).add(grant)
+            for issued in db.execute("SELECT * FROM prepaid_grants").fetchall():
+                payment = json.loads(issued["payment"])
+                if payment.get("source") != "discord_entitlement":
+                    continue
+                grant = AccessGrant(**payment["access"])
+                if (
+                    by_receipt.get(issued["receipt"]) != grant
+                    or issued["payment"] != self.ledger.access_payload(grant)
+                    or issued["receipt"] != grant.receipt_id
+                    or issued["guild"] != grant.guild_id
+                    or issued["product"] != grant.product
+                    or issued["starts"] != grant.starts
+                    or issued["ends"] != grant.ends
+                ):
+                    # An orphaned old receipt may contain usage or a reversal;
+                    # never replace it with a fresh stable-key allowance.
+                    raise ValueError()
+        except (TypeError, KeyError, ValueError, AttributeError):
+            raise Denied(
+                "Discord access history changed identity or terms; "
+                "audited accounting migration required."
+            ) from None
+        return history
+
+    def _grant_for_access(
+        self, history: dict[tuple[str, int, int], set[AccessGrant]], row: Access
+    ) -> AccessGrant:
+        """Resolve one issued cycle, retaining any pre-fix receipt/request keys."""
+        grant = AccessGrant(
+            f"discord-access:{self.application_id}:{row.entitlement_id}:"
+            f"{row.subscription_id}:{row.starts}",
+            row.guild_id,
+            row.product,
+            row.starts,
+            row.ends,
+            self.application_id,
+            row.entitlement_id,
+            row.subscription_id,
+            row.sku_id,
+        )
+        # End is expiration metadata, not a new billing cycle. Match both IDs
+        # so a changed entitlement cannot reissue an existing subscription cycle.
+        candidates = history.get(
+            ("entitlement", row.entitlement_id, row.starts), set()
+        ) | history.get(("subscription", row.subscription_id, row.starts), set())
+        if len(candidates) > 1:
+            # Never pick the unused receipt or silently discard historical usage.
+            raise Denied("Duplicate Discord access cycles need audited accounting migration.")
+        if candidates:
+            previous = next(iter(candidates))
+            grant = replace(grant, receipt_id=previous.receipt_id)
+            if replace(previous, ends=grant.ends) != grant:
+                raise Denied("Discord access period changed identity or terms.")
+        return grant
+
     def _reconcile_access(self, access: list[Access], pending: int) -> dict[str, int]:
         """Commit the complete access snapshot and period grants as one transaction."""
         now = int(self.clock())
-        grants = []
-        for row in access:
-            receipt = (
-                f"discord-access:{self.application_id}:{row.entitlement_id}:"
-                f"{row.subscription_id}:{row.starts}:{row.ends}"
-            )
-            grants.append(
-                AccessGrant(
-                    receipt,
-                    row.guild_id,
-                    row.product,
-                    row.starts,
-                    row.ends,
-                    self.application_id,
-                    row.entitlement_id,
-                    row.subscription_id,
-                    row.sku_id,
-                )
-            )
-        desired = {grant.receipt_id for grant in grants}
         revoked = credited = 0
         with self.ledger.db() as db:
+            history = self._access_history(db)
+            grants = [self._grant_for_access(history, row) for row in access]
+            desired = {grant.receipt_id for grant in grants}
             rows = db.execute(
                 "SELECT receipt,payment,starts,ends FROM prepaid_grants WHERE revoked=0"
             ).fetchall()
@@ -587,15 +648,21 @@ class DiscordPurchases:
                 ],
             )
             for grant in grants:
+                if db.execute(
+                    "SELECT 1 FROM discord_purchase_invalid WHERE receipt_id=?",
+                    (grant.receipt_id,),
+                ).fetchone():
+                    continue
                 payload = self.ledger.access_payload(grant)
                 old = db.execute(
-                    "SELECT receipt_id,payload FROM discord_access_period "
-                    "WHERE entitlement_id=? AND starts=? AND ends=?",
-                    (grant.entitlement_id, grant.starts, grant.ends),
+                    "SELECT receipt_id FROM discord_access_period WHERE receipt_id=?",
+                    (grant.receipt_id,),
                 ).fetchone()
                 if old:
-                    if old["receipt_id"] != grant.receipt_id or old["payload"] != payload:
-                        raise Denied("Discord access period changed identity or terms.")
+                    db.execute(
+                        "UPDATE discord_access_period SET ends=?,payload=? WHERE receipt_id=?",
+                        (grant.ends, payload, grant.receipt_id),
+                    )
                 else:
                     db.execute(
                         "INSERT INTO discord_access_period VALUES(?,?,?,?,?)",
@@ -607,11 +674,6 @@ class DiscordPurchases:
                             payload,
                         ),
                     )
-                if db.execute(
-                    "SELECT 1 FROM discord_purchase_invalid WHERE receipt_id=?",
-                    (grant.receipt_id,),
-                ).fetchone():
-                    continue
                 if self.ledger._credit_access(db, grant):
                     credited += 1
             db.execute(

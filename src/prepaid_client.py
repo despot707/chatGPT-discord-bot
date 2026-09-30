@@ -129,8 +129,10 @@ def plan_embed(*, checkout_available: bool = False) -> discord.Embed:
         )
     e.set_footer(
         text=(
-            "Monthly USD price per server, before any applicable taxes. Allowances do not roll over. "
-            "Daily availability limits also apply; temporarily unavailable features resume as capacity resets. "
+            "Monthly USD price per server, before any applicable taxes. Discord renews automatically "
+            "unless cancelled. Each verified billing-period renewal refreshes the shared allowance once. "
+            "Cancel to stop the next renewal; access and remaining units continue through the current paid "
+            "period. No rollover or usage overages. "
             "No voice features, image editing, or image hosting are included."
         )
     )
