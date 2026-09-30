@@ -1,0 +1,10 @@
+{
+  "name": "discord-community-assistant-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify.mjs",
+    "test": "npm run build && npm run verify"
+  }
+}

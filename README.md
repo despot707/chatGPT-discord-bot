@@ -2,6 +2,8 @@
 
 A self-hosted Discord assistant you can mention during a conversation. It supports saved channel chat, image input, web lookups, and selectable AI providers. Run it on your PC or as one Railway worker. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
 
+Public website: [Discord Community Assistant](https://discord-community-assistant.pages.dev/), including [Privacy](https://discord-community-assistant.pages.dev/privacy/), [Terms](https://discord-community-assistant.pages.dev/terms/), and [Support](https://discord-community-assistant.pages.dev/support/). Paid plans are a preview; sales remain off. See the [commercial launch handoff](docs/commercial-launch.md) for the remaining account and payment gates, and [site/README.md](site/README.md) to rebuild or rename the site.
+
 ## Everyday chat
 
 Mention the actual bot account in Discord, for example `@Chat GPT can you check who's right here?`. Attach a screenshot to ask about it, or reply to a message and mention the bot to supply that message as context. Public bot conversations are shared within the channel or thread, so different people can continue the discussion. Private `/chat` conversations remain separate for each person.

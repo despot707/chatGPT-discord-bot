@@ -1,0 +1,23 @@
+name: Support or bug report
+description: Report a problem with the Discord Community Assistant.
+title: "[Support] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a public issue. Never include API keys, Discord tokens, payment details, private messages, or an export of your profile.
+        For personal data controls, use /profile in Discord, then Privacy & data. If those controls fail, describe the error without personal data and request a private follow-up from the app owner.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the command or feature, what you expected, and what happened. Redact any screenshots.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the approximate time and timezone if useful. Do not include server or user IDs in public.
+    validations:
+      required: false

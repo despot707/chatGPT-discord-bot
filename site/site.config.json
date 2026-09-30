@@ -1,0 +1,16 @@
+{
+  "brand": {
+    "name": "Discord Community Assistant",
+    "shortName": "Community Assistant",
+    "tagline": "Good company. Better conversations.",
+    "description": "A thoughtful AI conversation companion and game night helper for Discord communities."
+  },
+  "baseUrl": "https://discord-community-assistant.pages.dev",
+  "inviteUrl": "",
+  "supportUrl": "https://github.com/despot707/chatGPT-discord-bot/issues",
+  "sourceUrl": "https://github.com/despot707/chatGPT-discord-bot",
+  "saleStatus": "coming_soon",
+  "pricing": {
+    "source": "docs/prepaid-plans.md"
+  }
+}

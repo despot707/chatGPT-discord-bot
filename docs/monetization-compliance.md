@@ -2,6 +2,8 @@
 
 Last audited: 2026-09-29
 
+Public [Privacy Policy](https://discord-community-assistant.pages.dev/privacy/), [Terms](https://discord-community-assistant.pages.dev/terms/), and [Support](https://discord-community-assistant.pages.dev/support/) pages are published on Cloudflare Pages. See [commercial-launch.md](commercial-launch.md) for portal URLs, observed deployment state, and the remaining payment/owner gates. Public policies do not establish Premium Apps approval.
+
 ## Implemented in the application
 
 - Member profiles are explicit, member-controlled, private by default, and keyed to Discord IDs.
@@ -13,7 +15,7 @@ Last audited: 2026-09-29
 - Commercial system instructions do not encourage sexually explicit output or gratuitous profanity/vulgarity.
 - Secrets are kept in hosting-provider variables rather than the repository.
 - Persistent storage is hosted on Railway; Railway's Trust Center/support documentation states customer data at rest, including persistent volumes and native volume backups, is encrypted at rest. Obtain the applicable Trust Center/SOC documentation for the operator's compliance records.
-- Public policy drafts are maintained at PRIVACY.md and TERMS.md.
+- Public policies are maintained at PRIVACY.md and TERMS.md and rendered into the site during its build.
 
 ## Required operator actions before enabling paid SKUs
 
@@ -27,7 +29,7 @@ These cannot be completed by application code and must be confirmed in the Disco
 6. Developer Portal Terms of Service URL points to the current public Terms.
 7. Developer Portal Privacy Policy URL points to the current public Privacy Policy.
 8. App name, description, command metadata, role-connection metadata, SKU names/descriptions/artwork, and Store Page contain no harmful/bad language and accurately describe the product.
-9. A durable public support/contact method is configured in the application profile. Replace the policy drafts' generic contact language with that contact before launch.
+9. Configure the published support URL in the application profile. The public GitHub issue route is enabled; confirm the operator identity and a private escalation contact before launch.
 10. Payout Settings are completed with a valid payment method.
 11. Team owner accepts Discord Monetization Terms and Monetization Policy.
 12. The Developer Portal Premium Apps eligibility checklist is fully green.
