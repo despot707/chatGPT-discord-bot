@@ -1,0 +1,96 @@
+"""Keep unit tests independent of developer credentials and live services."""
+
+from __future__ import annotations
+
+import aiohttp
+import httpx
+import pytest
+import requests
+
+BOT_ENVIRONMENT = (
+    "AI_ACCESS_MODE",
+    "HARD_BUDGET_ENABLED",
+    "BUDGET_DATABASE_PATH",
+    "BUDGET_MONTHLY_USD",
+    "BUDGET_LUNA_USD",
+    "BUDGET_TIMEZONE",
+    "BUDGET_OPENING_MONTH_SPEND_USD",
+    "DISCORD_BOT_TOKEN",
+    "STEAM_API_KEY",
+    "GAMING_DATABASE_PATH",
+    "CHAT_DATABASE_PATH",
+    "CHAT_RETENTION_DAYS",
+    "ENABLE_OPENAI_WEB_SEARCH",
+    "DEFAULT_PROVIDER",
+    "DEFAULT_MODEL",
+    "ENABLE_MESSAGE_CONTENT",
+    "ENABLE_IMAGE_GENERATION",
+    "ALLOW_PAID_PROVIDERS",
+    "ALLOWED_GUILD_IDS",
+    "ALLOWED_CHANNEL_IDS",
+    "BOT_ADMIN_IDS",
+    "ADMIN_USER_IDS",
+    "REPLYALL_CHANNEL_IDS",
+    "MAX_INPUT_CHARS",
+    "MAX_OUTPUT_TOKENS",
+    "HISTORY_MESSAGES",
+    "HISTORY_CHARS",
+    "MAX_SESSIONS",
+    "IDLE_TTL_SECONDS",
+    "MAX_CONCURRENT_REQUESTS",
+    "COOLDOWN_SECONDS",
+    "REQUEST_TIMEOUT_SECONDS",
+    "SYSTEM_PROMPT",
+    "GEMINI_API_KEY",
+    "GEMINI_KEY",
+    "GEMINI_MODEL",
+    "OPENAI_API_KEY",
+    "OPENAI_KEY",
+    "OPENAI_MODEL",
+    "OPENAI_REASONING_EFFORT",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_KEY",
+    "CLAUDE_MODEL",
+    "XAI_API_KEY",
+    "GROK_KEY",
+    "GROK_MODEL",
+    "OLLAMA_BASE_URL",
+    "OLLAMA_MODEL",
+    "OLLAMA_SUPPORTS_VISION",
+    "GROQ_API_KEY",
+    "GROQ_MODEL",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
+    "ENABLE_PROVIDER_FALLBACK",
+    "FALLBACK_PROVIDERS",
+    "MAX_PROVIDER_ATTEMPTS",
+    "PROVIDER_ATTEMPT_TIMEOUT_SECONDS",
+    "PROVIDER_COOLDOWN_SECONDS",
+    "TAVILY_API_KEY",
+    "ENABLE_WEB_SEARCH",
+    "ENABLE_WEB_BROWSING",
+    "WEB_MAX_BYTES",
+    "WEB_MAX_CHARS",
+    "INTERACTION_CHANNEL_IDS",
+    "AUTOMATIC_CONTEXT_COUNT",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_bot_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ambient tokens and provider settings from changing test behavior."""
+    for name in BOT_ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def block_live_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block common HTTP clients while leaving local event-loop sockets intact."""
+
+    def denied(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("Live network access is disabled in tests; use a mock transport.")
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", denied)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", denied)
+    monkeypatch.setattr(aiohttp.ClientSession, "_request", denied)
+    monkeypatch.setattr(requests.Session, "request", denied)

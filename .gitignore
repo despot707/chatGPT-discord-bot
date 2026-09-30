@@ -1,6 +1,11 @@
 # Generated image files
 images/
 
+# Local gaming profiles and parties, including SQLite journal files.
+data/
+*.sqlite3
+*.sqlite3-*
+
 config.json
 cookies.json
 *.har
@@ -131,6 +136,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+logs/
 env/
 venv/
 ENV/

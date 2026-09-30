@@ -1,50 +1,70 @@
+"""Safe Discord response chunking helpers."""
+
+from __future__ import annotations
+
 import re
-from discord import Message
 
-async def send_split_message(self, response: str, message: Message, has_followed_up=False):
-    char_limit = 1900
-    if len(response) > char_limit:
-        is_code_block = False
-        parts = response.split("```")
+import discord
 
-        for i in range(len(parts)):
-            if is_code_block:
-                code_block_chunks = [parts[i][j:j+char_limit] for j in range(0, len(parts[i]), char_limit)]
-                for chunk in code_block_chunks:
-                    if self.is_replying_all == "True" or has_followed_up:
-                        await message.channel.send(f"```{chunk}```")
-                    else:
-                        await message.followup.send(f"```{chunk}```")
-                        has_followed_up = True
-                is_code_block = False
-            else:
-                non_code_chunks = [parts[i][j:j+char_limit] for j in range(0, len(parts[i]), char_limit)]
-                for chunk in non_code_chunks:
-                    if self.is_replying_all == "True" or has_followed_up:
-                        await message.channel.send(chunk)
-                    else:
-                        await message.followup.send(chunk)
-                        has_followed_up = True
-                is_code_block = True
-    else:
-        if self.is_replying_all == "True" or has_followed_up:
-            await message.channel.send(response)
+_MARKDOWN_LINK = re.compile(r"\[(?:\\.|[^\]\\])*\]\((?:<[^>\r\n]+>|[^\s)]+)\)")
+
+
+def split_message(text: str, limit: int = 1900) -> list[str]:
+    """Split text at line or word boundaries when possible, under Discord limits."""
+    if limit <= 0:
+        raise ValueError("Message length limit must be positive.")
+    chunks: list[str] = []
+    remaining = text or "(empty response)"
+    while len(remaining) > limit:
+        cut = remaining.rfind("\n", 0, limit + 1)
+        if cut < limit // 2:
+            cut = remaining.rfind(" ", 0, limit + 1)
+        if cut < limit // 2:
+            cut = limit
+        # Include the boundary character so indentation and whitespace survive round trips.
+        if cut < limit and remaining[cut] in "\n ":
+            cut += 1
+        # Move the boundary before a link rather than splitting its title or URL.
+        for link in _MARKDOWN_LINK.finditer(remaining):
+            if link.start() >= cut:
+                break
+            if link.start() < cut < link.end() and len(link.group()) <= limit:
+                cut = link.start() or link.end()
+                break
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def send_split_message(response: str, destination, *, ephemeral: bool = False) -> None:
+    """Send every chunk to the original destination with consistent visibility."""
+    allowed_mentions = discord.AllowedMentions.none()
+    chunks = split_message(response)
+    is_interaction = hasattr(destination, "followup")
+    for index, chunk in enumerate(chunks):
+        if is_interaction:
+            await destination.followup.send(
+                chunk, ephemeral=ephemeral, allowed_mentions=allowed_mentions
+            )
         else:
-            await message.followup.send(response)
-            has_followed_up = True
+            options = {"allowed_mentions": allowed_mentions}
+            if index == 0 and callable(getattr(destination, "to_reference", None)):
+                options["reference"] = destination.to_reference(fail_if_not_exists=False)
+            await destination.channel.send(chunk, **options)
 
-    return has_followed_up
 
-
-async def send_response_with_images(self, response: dict, message: Message):
-    response_content = response.get("content")
-    response_images = response.get("images")
-
-    split_message_text = re.split(r'\[Image of.*?\]', response_content)
-
-    for i in range(len(split_message_text)):
-        if split_message_text[i].strip():
-            await send_split_message(self, split_message_text[i].strip(), message, has_followed_up=True)
-
-        if response_images and i < len(response_images):
-            await send_split_message(self, response_images[i].strip(), message, has_followed_up=True)
+async def send_response_with_images(
+    response: dict, destination, *, ephemeral: bool = False
+) -> None:
+    content = response.get("content", "") or ""
+    images = response.get("images") or []
+    await send_split_message(content, destination, ephemeral=ephemeral)
+    for image in images:
+        if hasattr(destination, "followup"):
+            await destination.followup.send(
+                image, ephemeral=ephemeral, allowed_mentions=discord.AllowedMentions.none()
+            )
+        else:
+            await destination.channel.send(image, allowed_mentions=discord.AllowedMentions.none())
