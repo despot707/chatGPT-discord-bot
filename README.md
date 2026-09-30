@@ -49,9 +49,17 @@ On your PC, keep the `data` folder between runs. Docker Compose creates a writab
 
 ## Requirements
 
+For a public launch before paid AI access is available, set `AI_ACCESS_MODE=disabled`
+in the bot's environment. Chat, image generation, and model-backed search/browse
+then return a generic unavailable message without calling an AI provider. Discord,
+Steam profiles, parties, game matching, and team balancing remain available.
+`AI_ACCESS_MODE=personal` is the legacy default and permits existing AI behavior;
+it is not a paid-access check. Restart the bot after changing this setting.
+
 - Python 3.12 or 3.13 for Windows hosting
 - A Discord application and bot token
-- A Gemini key for the default provider, or credentials/configuration for another provider
+- A Gemini key for the default provider, or credentials/configuration for another provider,
+  when `AI_ACCESS_MODE=personal`
 
 Create an application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and invite it with the `bot` and `applications.commands` OAuth scopes. Grant only the channel permissions it needs, such as View Channel and Send Messages; add Embed Links and Attach Files for image features. If using threads, grant Send Messages in Threads.
 

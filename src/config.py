@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
+from src.ai_access import parse_ai_access_mode
+
 OPENAI_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -57,6 +59,7 @@ def _ids(env: Mapping[str, str], name: str) -> frozenset[int]:
 @dataclass(frozen=True)
 class BotConfig:
     discord_bot_token: Optional[str]
+    ai_access_mode: str = "personal"
     default_provider: str = "gemini"
     default_model: str = "auto"
     enable_message_content: bool = False
@@ -93,11 +96,16 @@ class BotConfig:
     memory_database_path: str = "data/memory.sqlite3"
     memory_context_items: int = 12
 
+    def __post_init__(self) -> None:
+        if self.ai_access_mode not in {"personal", "disabled"}:
+            raise ValueError("AI_ACCESS_MODE must be personal or disabled")
+
     @classmethod
     def from_env(
         cls, environ: Optional[Mapping[str, str]] = None, require_discord_token: bool = True
     ) -> "BotConfig":
         env = os.environ if environ is None else environ
+        ai_access_mode = parse_ai_access_mode(env)
         token = env.get("DISCORD_BOT_TOKEN", "").strip() or None
         if require_discord_token and not token:
             raise ValueError("Missing required environment variable: DISCORD_BOT_TOKEN")
@@ -113,7 +121,7 @@ class BotConfig:
                 "DEFAULT_PROVIDER must be gemini, groq, openrouter, openai, claude, grok, or ollama"
             )
         default_model = env.get("DEFAULT_MODEL", "auto").strip() or "auto"
-        if hard_budget_enabled:
+        if hard_budget_enabled and ai_access_mode != "disabled":
             if provider != "openai":
                 raise ValueError("Hard budget mode requires DEFAULT_PROVIDER=openai")
             if default_model not in {"auto", "gpt-6-luna"}:
@@ -133,6 +141,7 @@ class BotConfig:
                 raise ValueError("WEB_MAX_CHARS must be at most 20000")
             return cls(
                 discord_bot_token=token,
+                ai_access_mode=ai_access_mode,
                 default_provider=provider,
                 default_model=default_model,
                 enable_message_content=_bool(env, "ENABLE_MESSAGE_CONTENT"),
@@ -147,13 +156,15 @@ class BotConfig:
                 replyall_channel_ids=_ids(env, "REPLYALL_CHANNEL_IDS"),
                 interaction_channel_ids=_ids(env, "INTERACTION_CHANNEL_IDS"),
                 automatic_context_count=automatic_context_count,
-                enable_web_search=not hard_budget_enabled
+                enable_web_search=ai_access_mode != "disabled"
+                and not hard_budget_enabled
                 and _bool(
                     env,
                     "ENABLE_WEB_SEARCH",
                     default=bool(env.get("TAVILY_API_KEY", "").strip()),
                 ),
-                enable_openai_web_search=_bool(env, "ENABLE_OPENAI_WEB_SEARCH"),
+                enable_openai_web_search=ai_access_mode != "disabled"
+                and _bool(env, "ENABLE_OPENAI_WEB_SEARCH"),
                 enable_web_browsing=_bool(env, "ENABLE_WEB_BROWSING", default=True),
                 web_max_bytes=web_max_bytes,
                 web_max_chars=web_max_chars,

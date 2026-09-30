@@ -19,6 +19,7 @@ import discord
 from discord import app_commands
 
 from src import personas
+from src.ai_access import ai_disabled
 from src.budget import BudgetError
 from src.chat_store import ChatStore
 from src.config import BotConfig
@@ -126,7 +127,8 @@ class DiscordClient(discord.Client):
             api_key=os.environ.get("TAVILY_API_KEY"),
             max_bytes=config.web_max_bytes,
             max_chars=config.web_max_chars,
-            allow_paid_search=not config.hard_budget_enabled,
+            allow_paid_search=not config.hard_budget_enabled
+            and config.ai_access_mode != "disabled",
         )
         # Gaming services are constructed on first use, so ordinary bot clients
         # and tests do not create a database or initialize a Steam client.
@@ -398,6 +400,8 @@ class DiscordClient(discord.Client):
         reasoning_requested: bool = False,
         include_shared_history: bool = False,
     ) -> str:
+        if ai_disabled(self.config.ai_access_mode, "chat response"):
+            raise BotRequestError(PUBLIC_FAILURE)
         if len(text) > self.config.max_input_chars:
             raise BotRequestError(
                 f"Message is too long (maximum {self.config.max_input_chars} characters)."
@@ -549,6 +553,8 @@ class DiscordClient(discord.Client):
         scope: tuple[int, int, int],
         settings_snapshot: Optional[tuple[ProviderType, str]] = None,
     ) -> str | bytes:
+        if ai_disabled(self.config.ai_access_mode, "image generation"):
+            raise BotRequestError(PUBLIC_FAILURE)
         if not self.config.enable_image_generation:
             raise BotRequestError(PUBLIC_FAILURE)
         if len(prompt) > self.config.max_input_chars:
@@ -792,7 +798,10 @@ class DiscordClient(discord.Client):
 
         @self.tree.command(name="draw", description="Generate an image from a prompt")
         async def draw(interaction: discord.Interaction, prompt: str):
-            if not self.config.enable_image_generation:
+            if (
+                ai_disabled(self.config.ai_access_mode, "draw command")
+                or not self.config.enable_image_generation
+            ):
                 await interaction.response.send_message(PUBLIC_FAILURE, ephemeral=True)
                 return
             prompt = prompt.replace("\x00", "").strip()
@@ -878,12 +887,15 @@ class DiscordClient(discord.Client):
         @self.tree.command(name="status", description="Show your current bot settings")
         async def status(interaction: discord.Interaction):
             s = self.get_settings(self._scope(interaction))
-            provider = self.provider_manager.get_provider(s.provider)
-            model = (
-                s.model
-                if s.model != "auto"
-                else getattr(provider, "default_model", "provider default")
-            )
+            if self.config.ai_access_mode == "disabled":
+                model = "disabled"
+            else:
+                provider = self.provider_manager.get_provider(s.provider)
+                model = (
+                    s.model
+                    if s.model != "auto"
+                    else getattr(provider, "default_model", "provider default")
+                )
             persistence = (
                 "unavailable"
                 if self._chat_store_unavailable
@@ -925,6 +937,11 @@ class DiscordClient(discord.Client):
         if not self.allowed(scope):
             await interaction.response.send_message(
                 "This bot is not enabled in this server or channel.", ephemeral=True
+            )
+            return
+        if ai_disabled(self.config.ai_access_mode, "chat command"):
+            await interaction.response.send_message(
+                PUBLIC_FAILURE, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
             )
             return
         message = message.replace("\x00", "").strip()
@@ -1161,6 +1178,11 @@ class DiscordClient(discord.Client):
                 "This bot is not enabled in this server or channel.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if ai_disabled(self.config.ai_access_mode, f"{kind} command"):
+            await interaction.response.send_message(
+                PUBLIC_FAILURE, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
             )
             return
         native_search = bool(getattr(self.config, "enable_openai_web_search", False))
@@ -1450,6 +1472,12 @@ class DiscordClient(discord.Client):
             )
             return
         if not content:
+            return
+
+        if ai_disabled(self.config.ai_access_mode, "message response"):
+            await message.channel.send(
+                PUBLIC_FAILURE, allowed_mentions=discord.AllowedMentions.none()
+            )
             return
 
         if intent.draw_prompt:
