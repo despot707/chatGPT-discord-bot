@@ -1,6 +1,6 @@
 # Static community assistant site
 
-This is a dependency-free static website for Cloudflare Pages. It contains no account system, checkout, forms, JavaScript, analytics, cookies, or third-party assets. Its branding and links live in `site.config.json`; the default display name is temporary and can be renamed there.
+This is a dependency-free static website for Cloudflare Pages. The site source contains no account system, checkout, forms, JavaScript, analytics, cookies, or third-party assets. Its branding and links live in `site.config.json`.
 
 ## Build and verify
 
@@ -26,7 +26,7 @@ npx wrangler@4.144.0 pages deploy dist --project-name discord-community-assistan
 
 The deploy command publishes the already-built `dist/` directory. No Wrangler dependency or server runtime is needed in the website package. The included `_headers` file applies static security headers.
 
-Before public launch, replace the temporary brand in `site.config.json`, set `baseUrl` to the final HTTPS origin, and set `inviteUrl` only after verifying the bot's actual install link. Keep `saleStatus` as `coming_soon`; the build fails if it changes because this website has no checkout flow. After changing these values, rebuild and verify before deploying.
+The site display name is `Sidecord Ai`, matching the Discord Developer Portal. The canonical base URL is `https://sidecord-ai.com`. Set `inviteUrl` only after verifying an install link that includes the bot scope and confirming the bot can join a server. The currently provided authorization link includes only `applications.commands`, so it does not establish a bot invite. Keep `saleStatus` as `coming_soon`; the build fails if it changes because this website has no checkout flow. After changing configuration, rebuild and verify before deploying.
 
 The support URL points to the public repository issue tracker. It is a user-initiated external link, not an embedded form. Tell users not to post credentials, tokens, private messages, or other sensitive information in public issues.
 
