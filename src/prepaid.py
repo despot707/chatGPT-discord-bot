@@ -8,13 +8,17 @@ payment amount, currency, settlement or renewal. No Discord command grants credi
 from __future__ import annotations
 
 import json
+import os
 import random
 import sqlite3
 import time
 import uuid
+import weakref
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from threading import Condition, Lock, get_ident
 from typing import Callable
 
 
@@ -30,6 +34,55 @@ MIB = 1024**2
 SQLITE_BUSY_TIMEOUT_MS = 250
 SQLITE_BODY_BUSY_TIMEOUT_MS = 10000
 SQLITE_BEGIN_RETRY_SECONDS = 30
+
+
+class _Admission:
+    """Give local callers one turn each before competing for SQLite's writer lock."""
+
+    def __init__(self):
+        self.condition = Condition()
+        self.waiters: deque[object] = deque()
+        self.owner: int | None = None
+
+    @contextmanager
+    def enter(self):
+        ticket = object()
+        with self.condition:
+            if self.owner == get_ident():
+                raise RuntimeError("Nested prepaid transactions on one database are unsupported")
+            self.waiters.append(ticket)
+            try:
+                while self.waiters[0] is not ticket:
+                    self.condition.wait()
+            except BaseException:
+                self.waiters.remove(ticket)
+                self.condition.notify_all()
+                raise
+            self.owner = get_ident()
+        try:
+            yield
+        finally:
+            with self.condition:
+                self.owner = None
+                self.waiters.popleft()
+                self.condition.notify_all()
+
+
+_admissions_guard = Lock()
+_admissions: weakref.WeakValueDictionary[str, _Admission] = weakref.WeakValueDictionary()
+
+
+@contextmanager
+def _database_admission(path):
+    # Resolve aliases within this process; SQLite remains the cross-process lock.
+    key = os.path.normcase(str(Path(path).resolve()))
+    with _admissions_guard:
+        admission = _admissions.get(key)
+        if admission is None:
+            admission = _Admission()
+            _admissions[key] = admission
+    with admission.enter():
+        yield
 
 
 @dataclass(frozen=True)
@@ -127,6 +180,12 @@ class Ledger:
 
     @contextmanager
     def db(self):
+        with _database_admission(self.path):
+            with self._transaction() as db:
+                yield db
+
+    @contextmanager
+    def _transaction(self):
         db = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000, isolation_level=None)
         try:
             db.row_factory = sqlite3.Row

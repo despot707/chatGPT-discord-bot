@@ -152,6 +152,32 @@ def test_database_setup_contention_retry_is_bounded(ledger, monkeypatch):
     assert ledger.summary(1)["remaining"]["chat"] == PRODUCTS["basic"].allowances["chat"]
 
 
+def test_local_wait_does_not_spend_sqlite_retry_budget(ledger, monkeypatch):
+    ledger.credit(payment())
+    monkeypatch.setattr(prepaid, "SQLITE_BEGIN_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr(prepaid, "SQLITE_BUSY_TIMEOUT_MS", 10)
+    started = Event()
+
+    def reserve():
+        started.set()
+        return Ledger(ledger.path, clock=lambda: NOW).reserve(1, 2, "chat")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with ledger.db():
+            result = pool.submit(reserve)
+            assert started.wait(timeout=2)
+            sleep(0.15)
+            assert not result.done()
+        # The worker cannot finish until this transaction releases admission.
+        assert result.result(timeout=5)
+
+
+def test_nested_local_transaction_fails_without_deadlock(ledger):
+    with ledger.db():
+        with pytest.raises(RuntimeError, match="Nested prepaid transactions"):
+            ledger.summary(1)
+
+
 def test_commit_retries_until_reader_releases_shared_lock(ledger):
     ledger.credit(payment())
     reader = sqlite3.connect(ledger.path, isolation_level=None)
