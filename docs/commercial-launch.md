@@ -20,15 +20,28 @@ https://discord.com/oauth2/authorize?client_id=1365724363722068120&scope=bot%20a
 
 The existing API key's read-only model listing verified Luna and the September 8 Flare 2.5 snapshot. It did not list the old image snapshot or gpt-4.1-mini, so the commercial gateway uses Luna for chat/search and Flare for images. Model availability does not alone prove a successful paid request; live smoke results are recorded separately.
 
-## Publication steps
+## Published release
 
-1. Deploy the exact tested source with AI paused, native Discord access enforced, and the persistent $10 API ledger enabled ($7 Luna / $3 Extras, Pacific daily reset).
-2. Verify live startup, complete authenticated purchase reconciliation, and bounded model requests against that same ledger.
-3. Lift the AI pause; publish the three real guild-subscription SKUs with Store & API visibility and add them in Manage Store.
-4. Switch the website to `saleStatus: live`, deploy, and verify desktop/mobile checkout links and prices.
-5. Submit public bot-directory listings with accurate free/premium features and tags. A submitted review queue is not a public approved listing.
+On September 30, production release `591b7b8a52d61e7bb05861f230fb334fd5e8c8da` reached Railway SUCCESS as deployment `1e98221c-6921-45d9-8661-2e37ee0bb1da`. The bot registered 26 commands, connected to both existing guilds, completed its authenticated entitlement snapshot, and completed storage maintenance with zero records removed. AI is enabled; native Discord purchases and the persistent $10 API cap are enforced ($7 Luna / $3 Extras, Pacific daily reset).
 
-No manual invoice, assumed net revenue, or fabricated approval JSON is required for native Discord service access. Financial records remain separate. A real customer checkout/renewal is distinct from offline lifecycle tests and provider smoke tests.
+Railway's source now points to `codex/discord-purchase-reconciliation`. A variable-triggered deployment initially rebuilt the old `codex/modernize-discord-bot` branch. That deployment was stopped, the exact tested source restored, and the source setting corrected and independently read back. Future configuration changes must preserve the commercial source and persistent volume.
+
+All three guild-subscription SKUs are published with Store & API visibility and appear in the public store at $1.99, $4.99, and $9.99 per server/month. Public customer-facing buttons and the website's Basic deep link were verified in Discord. The application description and five tags (ai, chatbot, community, gaming, utilities) are saved.
+
+The live website is published at https://sidecord-ai.com with Cloudflare Pages deployment `b50681d9`. Its 76 static checks passed. Desktop and 390-pixel mobile views were checked; the mobile document has no horizontal overflow. All three plan links and the bot invite are present, and the Basic link opens its Discord product details.
+
+Actual provider calls returned chat, a valid 48,160-byte JPEG, a web answer, and explicit reasoning. Ordinary chat also succeeded when optional search capacity was unavailable. Testing found and fixed a startup-readiness lock race and the provider's completed-search-plus-ignored-attempt response shape. Both search dispatches retained their full conservative charge. The production ledger was backed up and audited at `/app/data/launch-reconciliation-1790804523`; no usage was reset. Recorded test charges totaled $0.094157, with zero pending reservations and no lock after final validation.
+
+The LNCCX type-1/null-end purchase fix is integrated. Verification included 544 passing tests and 3 platform skips in the full Windows run, then all 24 parser-level purchase tests after four additional identity negatives. Ruff, formatting, mypy, compilation, and Git diff checks passed. GitHub CI passed for the exact code commit on Linux/Windows and Docker. Payload tests use actual discord.py REST parsers with offline JSON; provider smoke tests use an isolated synthetic allowance. Neither is a real paid Discord checkout.
+
+## Remaining external verification
+
+- A real Discord purchase, customer access activation, and renewal have not yet been observed. No customer revenue or payout is claimed.
+- Top.gg and Discord Bot List submissions await the owner's OAuth approvals. No listing or review approval is claimed.
+- Discord Discovery requires a Community support server. Its selector had no eligible server; summary/language/description are prepared but not saved because the required server is absent.
+- Custom SKU artwork was not uploaded because the browser extension's file-upload permission is unavailable. Discord's default product artwork is live.
+
+No manual invoice, assumed net revenue, or fabricated approval JSON is required for native Discord service access. Financial records remain separate. The global cap protects this bot's calls from activation onward; unrelated use of the API key is outside this ledger.
 
 ## Interface references and boundaries
 

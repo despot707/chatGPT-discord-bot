@@ -9,7 +9,7 @@
   "inviteUrl": "https://discord.com/oauth2/authorize?client_id=1365724363722068120&scope=bot%20applications.commands&permissions=274878024704&integration_type=0",
   "supportUrl": "https://github.com/despot707/chatGPT-discord-bot/issues",
   "sourceUrl": "https://github.com/despot707/chatGPT-discord-bot",
-  "saleStatus": "coming_soon",
+  "saleStatus": "live",
   "checkout": {
     "applicationId": "1365724363722068120",
     "skus": {
