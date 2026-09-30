@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from src.aclient import BotRequestError, public_error_message
+from src.aclient import PUBLIC_FAILURE, BotRequestError, public_error_message
+from src.ai_access import ai_disabled
 from src.member_settings import ProfileStore, validate_change, visible_profile
 from src.prepaid import Denied
 from src.profile_privacy import erase_legacy_records
@@ -127,6 +128,9 @@ class ProfileClientMixin(_ProfileBase):
     async def propose_profile_change(self, interaction, text):
         scope = await self._profile_scope(interaction)
         if scope is None:
+            return
+        if ai_disabled(self.config.ai_access_mode, "profile proposal"):
+            await private_notice(interaction, PUBLIC_FAILURE)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         if not text.strip() or len(text) > 700:

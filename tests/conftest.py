@@ -8,6 +8,7 @@ import pytest
 import requests
 
 BOT_ENVIRONMENT = (
+    "AI_ACCESS_MODE",
     "HARD_BUDGET_ENABLED",
     "BUDGET_DATABASE_PATH",
     "BUDGET_MONTHLY_USD",

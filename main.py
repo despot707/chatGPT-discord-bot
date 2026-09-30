@@ -59,7 +59,7 @@ def load_explicit_environment(env_path: Path) -> None:
 def validate_environment(environ=None) -> BotConfig:
     env = os.environ if environ is None else environ
     config = BotConfig.from_env(env)
-    if config.hard_budget_enabled:
+    if config.hard_budget_enabled and config.ai_access_mode != "disabled":
         from src.providers import ProviderError, ProviderManager
 
         try:
@@ -67,18 +67,23 @@ def validate_environment(environ=None) -> BotConfig:
         except ProviderError as exc:
             raise ValueError(str(exc)) from None
     if (
-        config.default_provider in {"openai", "claude", "grok"}
+        config.ai_access_mode != "disabled"
+        and config.default_provider in {"openai", "claude", "grok"}
         and not config.allow_paid_providers
         and not config.hard_budget_enabled
     ):
         raise ValueError(f"{config.default_provider} requires ALLOW_PAID_PROVIDERS=true")
     key_names = KEY_NAMES.get(config.default_provider, ())
-    if key_names and not any(env.get(name, "").strip() for name in key_names):
+    if (
+        config.ai_access_mode != "disabled"
+        and key_names
+        and not any(env.get(name, "").strip() for name in key_names)
+    ):
         alias = f" (legacy alias: {key_names[1]})" if len(key_names) > 1 else ""
         raise ValueError(
             f"Missing API key for {config.default_provider}; set {key_names[0]}{alias}"
         )
-    if config.default_provider == "ollama":
+    if config.ai_access_mode != "disabled" and config.default_provider == "ollama":
         model = env.get("OLLAMA_MODEL", "").strip()
         endpoint = env.get("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
         parsed = urlsplit(endpoint)
@@ -118,7 +123,9 @@ def main(argv=None) -> int:
         return 2
     if args.check_config:
         print(f"Configuration OK (provider: {config.default_provider}).")
-        if config.hard_budget_enabled:
+        if config.ai_access_mode == "disabled":
+            print("AI_ACCESS_MODE=disabled: all model-backed features are blocked.")
+        if config.hard_budget_enabled and config.ai_access_mode != "disabled":
             print(
                 "Hard API budget enabled; ledger readiness and remaining allowance are shown by /budget."
             )

@@ -19,6 +19,7 @@ from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
 
+from src.ai_access import ai_disabled, parse_ai_access_mode
 from src.budget import BudgetError, BudgetExceeded, BudgetLedger, BudgetPolicy
 from src.config import _bool, _openai_reasoning_effort
 
@@ -1184,12 +1185,13 @@ class ProviderManager:
 
     def __init__(self, environ: Optional[Mapping[str, str]] = None):
         self.environ = dict(os.environ if environ is None else environ)
+        self.ai_access_mode = parse_ai_access_mode(self.environ)
         self.budget: Optional[BudgetLedger] = None
         try:
             self.strict_budget = _bool(self.environ, "HARD_BUDGET_ENABLED")
         except ValueError:
             raise ProviderError("HARD_BUDGET_ENABLED must be true or false.") from None
-        if self.strict_budget:
+        if self.strict_budget and self.ai_access_mode != "disabled":
             configured_provider = (self.environ.get("DEFAULT_PROVIDER") or "").strip().lower()
             configured_model = (self.environ.get("OPENAI_MODEL") or "").strip()
             if configured_provider and configured_provider != "openai":
@@ -1204,7 +1206,7 @@ class ProviderManager:
             else self._parse_provider(self.environ.get("DEFAULT_PROVIDER", "gemini"))
         )
         self._cooldown_until: dict[ProviderType, float] = {}
-        if self.strict_budget:
+        if self.strict_budget and self.ai_access_mode != "disabled":
             self.budget = self._create_budget()
         self._initialize_providers()
 
@@ -1276,6 +1278,9 @@ class ProviderManager:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _initialize_providers(self) -> None:
+        if self.ai_access_mode == "disabled":
+            logger.warning("AI_ACCESS_MODE=disabled: all AI providers are inactive")
+            return
         if self.strict_budget:
             key = (
                 self.environ.get("OPENAI_API_KEY") or self.environ.get("OPENAI_KEY") or ""
@@ -1399,6 +1404,8 @@ class ProviderManager:
         **kwargs: Any,
     ) -> CompletionResult:
         """Complete a chat request with bounded, eligible provider failover."""
+        if ai_disabled(self.ai_access_mode, "chat completion"):
+            raise ProviderError("AI access is disabled by the administrator.")
         primary = (
             self.current_provider if provider_type is None else self._parse_provider(provider_type)
         )
@@ -1519,6 +1526,8 @@ class ProviderManager:
         )
 
     def get_provider(self, provider_type: Optional[ProviderType | str] = None) -> BaseProvider:
+        if ai_disabled(self.ai_access_mode, "provider access"):
+            raise ProviderError("AI access is disabled by the administrator.")
         selected = (
             self.current_provider if provider_type is None else self._parse_provider(provider_type)
         )
