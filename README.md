@@ -2,7 +2,9 @@
 
 A self-hosted Discord assistant you can mention during a conversation. It supports saved channel chat, image input, web lookups, and selectable AI providers. Run it on your PC or as one Railway worker. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
 
-Public website: [Sidecord Ai](https://sidecord-ai.com/), including [Privacy](https://sidecord-ai.com/privacy/), [Terms](https://sidecord-ai.com/terms/), and [Support](https://sidecord-ai.com/support/). The deployed site and its public routes have been verified; paid plans remain a preview and sales are off. See the [commercial launch handoff](docs/commercial-launch.md) for remaining account and payment gates, and [site/README.md](site/README.md) to rebuild the site.
+Public website: [Sidecord Ai](https://sidecord-ai.com/), including [Privacy](https://sidecord-ai.com/privacy/), [Terms](https://sidecord-ai.com/terms/), and [Support](https://sidecord-ai.com/support/). Basic, Plus, and Premium are published in the [Discord store](https://discord.com/discovery/applications/1365724363722068120/store). See the [commercial launch record](docs/commercial-launch.md) for exact deployed revisions and remaining verification, and [site/README.md](site/README.md) to rebuild the site.
+
+The self-hosted configuration below supports personal use. The public commercial deployment uses [authenticated server subscriptions](docs/discord-purchases.md), free code-based community tools, and [finite paid AI allowances](docs/prepaid-plans.md). Its [accounting migration](docs/paid-budget-continuity.md) preserves existing costs and holds while separating paid service from the old personal daily/monthly budget. Steam library imports and voice are not included in the public paid offering.
 
 ## Everyday chat
 
@@ -130,9 +132,9 @@ The bot cannot detect whether your Gemini or Groq account has paid billing enabl
 
 For Gemini's current model list, pricing, and limits, see Google's [models](https://ai.google.dev/gemini-api/docs/models), [pricing](https://ai.google.dev/gemini-api/docs/pricing), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). Google says data from unpaid Gemini API services may be used to improve its products, so do not send sensitive information on that tier. Groq publishes its current [free-plan model rate limits](https://console.groq.com/docs/rate-limits) and [billing details](https://console.groq.com/docs/billing-faqs). OpenRouter lists [free models](https://openrouter.ai/collections/free-models/) and its [free-model usage limits](https://openrouter.ai/docs/faq#how-does-the-free-models-router-work). Availability, terms, quotas, and billing can change at those services.
 
-### Strict API spending limit
+### Personal API spending limit
 
-Set `HARD_BUDGET_ENABLED=true` for a shared, persistent admission limit across all
+In personal mode, set `HARD_BUDGET_ENABLED=true` for a shared, persistent admission limit across all
 Discord users, servers, slash commands, and mention replies. The default plan is
 `BUDGET_MONTHLY_USD=10` with `BUDGET_LUNA_USD=7` protected for GPT-6 Luna and the
 remaining $3 for extras. Amounts above $10 are rejected in this mode.

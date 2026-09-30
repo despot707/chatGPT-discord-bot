@@ -8,15 +8,22 @@ the current monthly allowance without reducing its new daily allowance.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import sqlite3
+import sys
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import IO, TYPE_CHECKING, Callable, Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+if TYPE_CHECKING:
+    from src.prepaid import Ledger
 
 
 class BudgetError(RuntimeError):
@@ -67,6 +74,8 @@ def _validate_amount(value: int, *, allow_zero: bool, name: str) -> None:
 
 class BudgetLedger:
     """SQLite-backed budget shared by all callers using the same database path."""
+
+    accounting_mode = "personal-v1"
 
     def __init__(
         self,
@@ -146,6 +155,7 @@ class BudgetLedger:
                         "INSERT OR IGNORE INTO ledger_state(key, value) VALUES (?, ?)",
                         (policy_key, value),
                     )
+                self._configure_accounting(db)
                 count = db.execute("SELECT COUNT(*) FROM periods").fetchone()[0]
                 now = self._local_now()
                 month = now.strftime("%Y-%m")
@@ -194,6 +204,18 @@ class BudgetLedger:
         except (sqlite3.Error, OSError) as exc:
             raise BudgetError("Budget ledger is unavailable; requests are blocked.") from exc
 
+    def _configure_accounting(self, db: sqlite3.Connection) -> None:
+        self._assert_accounting_mode(db)
+        db.execute(
+            "INSERT OR IGNORE INTO ledger_state VALUES ('accounting_mode', ?)",
+            (self.accounting_mode,),
+        )
+
+    def _assert_accounting_mode(self, db: sqlite3.Connection) -> None:
+        row = db.execute("SELECT value FROM ledger_state WHERE key='accounting_mode'").fetchone()
+        if row is not None and row[0] != self.accounting_mode:
+            raise BudgetError("Budget accounting mode changed; this caller is blocked.")
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -221,6 +243,7 @@ class BudgetLedger:
         )
 
     def _assert_unlocked(self, db: sqlite3.Connection) -> None:
+        self._assert_accounting_mode(db)
         row = db.execute("SELECT value FROM ledger_state WHERE key='locked_reason'").fetchone()
         if row:
             raise BudgetExceeded("Budget ledger is locked; requests are blocked.")
@@ -230,6 +253,13 @@ class BudgetLedger:
 
     def reserve_many(self, amounts: dict[str, int]) -> list[Reservation]:
         """Atomically reserve several buckets, or reserve none of them."""
+        return self._reserve_many(amounts)
+
+    def _reserve_many(
+        self, amounts: dict[str, int], *, paid_ids: dict[str, str] | None = None
+    ) -> list[Reservation]:
+        if paid_ids is not None and self.accounting_mode != "paid-entitlement-v1":
+            raise BudgetError("Paid reservations require the paid accounting policy.")
         if not amounts:
             raise ValueError("At least one reservation is required")
         normalized: list[tuple[str, int]] = []
@@ -254,69 +284,72 @@ class BudgetLedger:
                     raise BudgetExceeded(
                         "Opening month spend is unknown; requests are blocked until it is supplied."
                     )
-                active_total = db.execute(
-                    "SELECT COALESCE(SUM(reserved_micros), 0) FROM reservations WHERE status='pending'"
-                ).fetchone()[0]
-                month_total_charges = db.execute(
-                    "SELECT COALESCE(SUM(amount_micros), 0) FROM charges WHERE charge_month=?",
-                    (month,),
-                ).fetchone()[0]
-                limits = {
-                    "luna": self.policy.luna_monthly_micros,
-                    "extras": self.policy.extras_monthly_micros,
-                }
-                pending_by_bucket = dict(
-                    db.execute(
-                        "SELECT bucket, COALESCE(SUM(reserved_micros), 0) "
-                        "FROM reservations WHERE status='pending' GROUP BY bucket"
-                    ).fetchall()
-                )
-                pending_today_by_bucket = dict(
-                    db.execute(
-                        "SELECT bucket, COALESCE(SUM(reserved_micros), 0) "
-                        "FROM reservations WHERE status='pending' AND origin_day=? GROUP BY bucket",
-                        (day,),
-                    ).fetchall()
-                )
-                month_by_bucket = dict(
-                    db.execute(
-                        "SELECT bucket, COALESCE(SUM(amount_micros), 0) FROM charges "
-                        "WHERE charge_month=? GROUP BY bucket",
+                if paid_ids is None:
+                    active_total = db.execute(
+                        "SELECT COALESCE(SUM(reserved_micros), 0) FROM reservations WHERE status='pending'"
+                    ).fetchone()[0]
+                    month_total_charges = db.execute(
+                        "SELECT COALESCE(SUM(amount_micros), 0) FROM charges WHERE charge_month=?",
                         (month,),
-                    ).fetchall()
-                )
-                day_by_bucket = dict(
-                    db.execute(
-                        "SELECT bucket, COALESCE(SUM(amount_micros), 0) FROM charges "
-                        "WHERE charge_day=? GROUP BY bucket",
-                        (day,),
-                    ).fetchall()
-                )
-                days = _days_in_month(now.date())
-                daily_limits = {name: amount // days for name, amount in limits.items()}
-                addition = sum(amount for _, amount in normalized)
-                if (
-                    baseline + month_total_charges + active_total + addition
-                    > self.policy.monthly_limit_micros
-                ):
-                    raise BudgetExceeded("Monthly budget is exhausted; this request was not sent.")
-                for bucket, amount in normalized:
-                    bucket_month_usage = month_by_bucket.get(bucket, 0) + pending_by_bucket.get(
-                        bucket, 0
+                    ).fetchone()[0]
+                    limits = {
+                        "luna": self.policy.luna_monthly_micros,
+                        "extras": self.policy.extras_monthly_micros,
+                    }
+                    pending_by_bucket = dict(
+                        db.execute(
+                            "SELECT bucket, COALESCE(SUM(reserved_micros), 0) "
+                            "FROM reservations WHERE status='pending' GROUP BY bucket"
+                        ).fetchall()
                     )
-                    bucket_day_usage = day_by_bucket.get(bucket, 0) + pending_today_by_bucket.get(
-                        bucket, 0
+                    pending_today_by_bucket = dict(
+                        db.execute(
+                            "SELECT bucket, COALESCE(SUM(reserved_micros), 0) "
+                            "FROM reservations WHERE status='pending' AND origin_day=? GROUP BY bucket",
+                            (day,),
+                        ).fetchall()
                     )
-                    if bucket_month_usage + amount > limits[bucket]:
-                        raise BudgetExceeded(f"{bucket.title()} monthly budget is exhausted.")
-                    if bucket_day_usage + amount > daily_limits[bucket]:
-                        raise BudgetExceeded(f"{bucket.title()} daily budget is exhausted.")
-                    # Account for earlier entries in this same atomic request.
-                    pending_by_bucket[bucket] = pending_by_bucket.get(bucket, 0) + amount
-                    pending_today_by_bucket[bucket] = (
-                        pending_today_by_bucket.get(bucket, 0) + amount
+                    month_by_bucket = dict(
+                        db.execute(
+                            "SELECT bucket, COALESCE(SUM(amount_micros), 0) FROM charges "
+                            "WHERE charge_month=? GROUP BY bucket",
+                            (month,),
+                        ).fetchall()
                     )
-                    active_total += amount
+                    day_by_bucket = dict(
+                        db.execute(
+                            "SELECT bucket, COALESCE(SUM(amount_micros), 0) FROM charges "
+                            "WHERE charge_day=? GROUP BY bucket",
+                            (day,),
+                        ).fetchall()
+                    )
+                    days = _days_in_month(now.date())
+                    daily_limits = {name: amount // days for name, amount in limits.items()}
+                    addition = sum(amount for _, amount in normalized)
+                    if (
+                        baseline + month_total_charges + active_total + addition
+                        > self.policy.monthly_limit_micros
+                    ):
+                        raise BudgetExceeded(
+                            "Monthly budget is exhausted; this request was not sent."
+                        )
+                    for bucket, amount in normalized:
+                        bucket_month_usage = month_by_bucket.get(bucket, 0) + pending_by_bucket.get(
+                            bucket, 0
+                        )
+                        bucket_day_usage = day_by_bucket.get(
+                            bucket, 0
+                        ) + pending_today_by_bucket.get(bucket, 0)
+                        if bucket_month_usage + amount > limits[bucket]:
+                            raise BudgetExceeded(f"{bucket.title()} monthly budget is exhausted.")
+                        if bucket_day_usage + amount > daily_limits[bucket]:
+                            raise BudgetExceeded(f"{bucket.title()} daily budget is exhausted.")
+                        # Account for earlier entries in this same atomic request.
+                        pending_by_bucket[bucket] = pending_by_bucket.get(bucket, 0) + amount
+                        pending_today_by_bucket[bucket] = (
+                            pending_today_by_bucket.get(bucket, 0) + amount
+                        )
+                        active_total += amount
                 reservations: list[Reservation] = []
                 for bucket, amount in normalized:
                     reservation = Reservation(
@@ -332,6 +365,11 @@ class BudgetLedger:
                         "VALUES (?, ?, ?, ?, ?, 'pending')",
                         (reservation.id, bucket, day, month, amount),
                     )
+                    if paid_ids is not None:
+                        db.execute(
+                            "INSERT INTO paid_budget_links(request_id, reservation_id) VALUES (?, ?)",
+                            (paid_ids[bucket], reservation.id),
+                        )
                     reservations.append(reservation)
                 db.commit()
                 return reservations
@@ -558,6 +596,207 @@ class BudgetLedger:
                 if known
                 else 0,
             }
+        return result
+
+
+class PaidBudgetLedger(BudgetLedger):
+    """Version-one commercial accounting, usable only with bounded paid holds.
+
+    Original personal policy values are retained as immutable migration evidence,
+    not commercial admission ceilings. Native provider caps are unrelated.
+    """
+
+    accounting_mode = "paid-entitlement-v1"
+    _paid_ledger_path: str
+    _migration_backup: tuple[str | None, str | None]
+
+    def __init__(
+        self,
+        policy: BudgetPolicy,
+        path: str | Path,
+        opening_month_spend_micros: int | None,
+        *,
+        ledger: Ledger,
+        writer_lease: IO[str],
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        # This migration must run under the same single-writer lease as paid
+        # reconciliation, not an independent generic BudgetLedger construction.
+        if sys.platform == "win32":
+            raise BudgetError("Paid accounting requires the single-writer Linux container.")
+        import fcntl
+
+        if (
+            writer_lease.closed
+            or Path(writer_lease.name).resolve() != Path(ledger.path + ".lock").resolve()
+        ):
+            raise BudgetError("Paid policy migration requires the paid writer lease.")
+        fcntl.flock(writer_lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self._paid_ledger_path = str(Path(ledger.path).resolve())
+        self._migration_backup = self._backup_before_migration(Path(path))
+        super().__init__(policy, path, opening_month_spend_micros, clock=clock)
+
+    def _backup_before_migration(self, path: Path) -> tuple[str | None, str | None]:
+        """Keep a verified SQLite snapshot before the first metadata mutation."""
+        if not path.exists():
+            return None, None
+        try:
+            with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True) as source:
+                if not source.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='ledger_state'"
+                ).fetchone():
+                    return None, None
+                mode = source.execute(
+                    "SELECT value FROM ledger_state WHERE key='accounting_mode'"
+                ).fetchone()
+                if mode and mode[0] == self.accounting_mode:
+                    return None, None
+                backup = path.with_name(
+                    path.name + ".before-paid-v1-" + uuid.uuid4().hex + ".sqlite3"
+                )
+                # Exclusive creation protects earlier snapshots; never replace.
+                with backup.open("xb"):
+                    pass
+                with sqlite3.connect(backup) as target:
+                    source.backup(target)
+                    if target.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                        raise BudgetError("Paid migration backup integrity check failed.")
+                with backup.open("rb") as handle:
+                    os.fsync(handle.fileno())
+                    digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                return str(backup.resolve()), digest
+        except (sqlite3.Error, OSError) as exc:
+            raise BudgetError("Paid migration backup failed; accounting was not migrated.") from exc
+
+    def _configure_accounting(self, db: sqlite3.Connection) -> None:
+        row = db.execute("SELECT value FROM ledger_state WHERE key='accounting_mode'").fetchone()
+        mode = row[0] if row else "personal-v1"
+        if mode not in {"personal-v1", self.accounting_mode}:
+            raise BudgetError("Unsupported budget accounting mode migration.")
+        # All statements are in the constructor's BEGIN IMMEDIATE transaction.
+        # Never change periods, charges, reservation rows, baseline or lock reason.
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS paid_budget_migrations "
+            "(version INTEGER PRIMARY KEY, source_policy TEXT NOT NULL, migrated_at TEXT NOT NULL, "
+            "backup_path TEXT, backup_sha256 TEXT)"
+        )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS paid_budget_links "
+            "(request_id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL UNIQUE)"
+        )
+        source = json.dumps(
+            {
+                "monthly_limit_micros": self.policy.monthly_limit_micros,
+                "luna_monthly_micros": self.policy.luna_monthly_micros,
+                "timezone": self.policy.timezone,
+            },
+            sort_keys=True,
+        )
+        prior = db.execute(
+            "SELECT source_policy FROM paid_budget_migrations WHERE version=1"
+        ).fetchone()
+        binding = db.execute(
+            "SELECT value FROM ledger_state WHERE key='paid_ledger_path'"
+        ).fetchone()
+        if mode == self.accounting_mode:
+            if (
+                not prior
+                or prior[0] != source
+                or not binding
+                or binding[0] != self._paid_ledger_path
+            ):
+                raise BudgetError("Paid policy migration evidence or ledger binding is invalid.")
+        elif prior or binding:
+            raise BudgetError("Unexpected paid policy migration state; requests are blocked.")
+        else:
+            db.execute(
+                "INSERT INTO paid_budget_migrations VALUES (1, ?, ?, ?, ?)",
+                (source, self._local_now().isoformat(), *self._migration_backup),
+            )
+            db.execute(
+                "INSERT INTO ledger_state VALUES ('paid_ledger_path', ?)", (self._paid_ledger_path,)
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO ledger_state VALUES ('accounting_mode', ?)",
+                (self.accounting_mode,),
+            )
+
+    def _assert_unlocked(self, db: sqlite3.Connection) -> None:
+        super()._assert_unlocked(db)
+        if db.execute("SELECT 1 FROM periods WHERE baseline_known=0 LIMIT 1").fetchone():
+            raise BudgetExceeded("Opening month spend is unknown; paid accounting is blocked.")
+
+    def reserve_many(self, amounts: dict[str, int]) -> list[Reservation]:
+        raise BudgetError(
+            "Use authenticated paid unit reservations; generic paid spending is blocked."
+        )
+
+    def reserve_paid(self, ledger: Ledger, request_ids: list[str]) -> list[Reservation]:
+        """Hold exact finite maxima for already admitted authenticated plan units.
+
+        Cross-database interruption can leave an extra conservative hold, never
+        authorize an unreserved SDK call. Unique request links prevent re-use.
+        """
+        from src.prepaid import COSTS
+
+        if str(Path(ledger.path).resolve()) != self._paid_ledger_path:
+            raise BudgetError("Wrong paid ledger for this accounting policy.")
+        if not request_ids or len(request_ids) > 2 or len(set(request_ids)) != len(request_ids):
+            raise BudgetError("Invalid paid unit reservations.")
+        with ledger.db() as db:
+            if db.execute("SELECT 1 FROM prepaid_state WHERE key='locked'").fetchone():
+                raise BudgetExceeded("Paid usage ledger is locked.")
+            amounts = {}
+            ids = {}
+            identities = set()
+            for rid in request_ids:
+                row = db.execute(
+                    "SELECT r.*,g.payment,g.revoked,g.starts,g.ends FROM prepaid_requests r "
+                    "JOIN prepaid_grants g ON g.receipt=r.receipt WHERE r.id=?",
+                    (rid,),
+                ).fetchone()
+                if (
+                    not row
+                    or row["state"] != "reserved"
+                    or row["revoked"]
+                    or not row["starts"] <= ledger.clock() < row["ends"]
+                    or row["feature"] not in {"chat", "reasoning", "search", "images"}
+                    or row["reserved"] != COSTS[row["feature"]]
+                    or json.loads(row["payment"]).get("source") != "discord_entitlement"
+                ):
+                    raise BudgetError("Invalid authenticated paid unit reservation.")
+                bucket = "luna" if row["feature"] == "chat" else "extras"
+                if bucket in amounts:
+                    raise BudgetError("Invalid paired paid unit reservations.")
+                amounts[bucket] = row["reserved"]
+                ids[bucket] = rid
+                identities.add((row["guild"], row["user_id"]))
+            if len(identities) != 1:
+                raise BudgetError("Paid unit reservations belong to different members.")
+            return self._reserve_many(amounts, paid_ids=ids)
+
+    def snapshot(self) -> dict[str, object]:
+        result = super().snapshot()
+        with self._connect() as db:
+            db.execute("BEGIN")
+            # A late settlement has two charge rows for personal month limits.
+            # The reservation actual is the authoritative once-only lifetime cost.
+            actual = db.execute(
+                "SELECT COALESCE(SUM(actual_micros),0) FROM reservations WHERE status='settled'"
+            ).fetchone()[0]
+            baseline = db.execute(
+                "SELECT COALESCE(SUM(baseline_micros),0) FROM periods"
+            ).fetchone()[0]
+            unknown = db.execute("SELECT COUNT(*) FROM periods WHERE baseline_known=0").fetchone()[
+                0
+            ]
+            db.commit()
+        result.update(
+            accounting_mode=self.accounting_mode,
+            admission_limit_micros=None,
+            cumulative_spent_micros=baseline + actual,
+            cumulative_baseline_known=not unknown,
+        )
         return result
 
 

@@ -301,6 +301,25 @@ class BaseProvider(ABC):
             await client.close()
 
 
+class PaidGatewayMetadataProvider(BaseProvider):
+    """Menu/status metadata without credentials or a dispatchable SDK client."""
+
+    def __init__(self):
+        super().__init__(default_model="gpt-6-luna")
+
+    def get_available_models(self) -> list[ModelInfo]:
+        return [ModelInfo("gpt-6-luna", ProviderType.OPENAI, supports_vision=True)]
+
+    def supports_image_generation(self) -> bool:
+        return False
+
+    async def chat_completion(self, messages, model=None, **kwargs) -> str:
+        raise ProviderError("Use the authenticated paid gateway for model requests.")
+
+    async def generate_image(self, prompt, model=None, **kwargs) -> str | bytes:
+        raise ProviderError("Use the authenticated paid gateway for image requests.")
+
+
 class GeminiProvider(BaseProvider):
     """Official Google Gen AI SDK, using one async generate_content call."""
 
@@ -1187,6 +1206,9 @@ class ProviderManager:
         self.environ = dict(os.environ if environ is None else environ)
         self.ai_access_mode = parse_ai_access_mode(self.environ)
         self.budget: Optional[BudgetLedger] = None
+        # The paid wrapper owns its authenticated, bounded SDK. The legacy
+        # manager must not initialize a personal ledger or provide an escape SDK.
+        self.commercial_gateway_only = self.environ.get("PREPAID_MODE") == "enforce"
         try:
             self.strict_budget = _bool(self.environ, "HARD_BUDGET_ENABLED")
         except ValueError:
@@ -1206,7 +1228,11 @@ class ProviderManager:
             else self._parse_provider(self.environ.get("DEFAULT_PROVIDER", "gemini"))
         )
         self._cooldown_until: dict[ProviderType, float] = {}
-        if self.strict_budget and self.ai_access_mode != "disabled":
+        if (
+            self.strict_budget
+            and self.ai_access_mode != "disabled"
+            and not self.commercial_gateway_only
+        ):
             self.budget = self._create_budget()
         self._initialize_providers()
 
@@ -1278,6 +1304,10 @@ class ProviderManager:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _initialize_providers(self) -> None:
+        if self.commercial_gateway_only:
+            if self.ai_access_mode != "disabled":
+                self.providers[ProviderType.OPENAI] = PaidGatewayMetadataProvider()
+            return
         if self.ai_access_mode == "disabled":
             logger.warning("AI_ACCESS_MODE=disabled: all AI providers are inactive")
             return

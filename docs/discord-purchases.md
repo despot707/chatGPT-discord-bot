@@ -13,12 +13,15 @@ DISCORD_SKU_MAP=1554920142532513832:basic,1554920641088593990:plus,1554920977488
 PREPAID_DATABASE_PATH=/app/data/prepaid.sqlite3
 HARD_BUDGET_ENABLED=true
 BUDGET_DATABASE_PATH=/app/data/budget.sqlite3
+# Immutable source-ledger migration metadata; not commercial spending cutoffs.
 BUDGET_MONTHLY_USD=10
 BUDGET_LUNA_USD=7
 BUDGET_TIMEZONE=America/Los_Angeles
 ```
 
-Use the actual previously initialized global budget. An opening amount is a one-time reconciliation input, never a reason to recreate or reset a ledger. The deployment record documents activation and publication separately.
+Keep `HARD_BUDGET_ENABLED=true` for durable cost accounting. Preserve the original `BUDGET_*` values as immutable migration metadata; the former shared $10 monthly / $7 Luna pool and its daily slices are not paid-path cutoffs. Per-request maximum reservations and unresolved-usage holds remain recorded in the existing ledgers. Never recreate the ledger, clear reservations, or rewrite history during migration.
+
+Verified subscriptions authorize finite service for their authenticated billing periods; Discord payout is a separate event. While payout is pending, the owner bridges hosting and AI costs against verified subscription purchases, without treating expected proceeds as received cash. A payout delay by itself does not pause paid sales or active service. The $100 monthly planning baseline is advisory only: crossing it warns the operator and does not stop paid requests or renewals. Record expected net receipts, realized cash, and outstanding service obligations separately.
 
 | Product | SKU ID | Price / month |
 |---|---:|---:|

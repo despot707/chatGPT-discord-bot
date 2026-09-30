@@ -8,7 +8,7 @@ import os
 from typing import Any, Callable
 
 from src.ai_access import ai_disabled, parse_ai_access_mode
-from src.budget import BudgetExceeded, BudgetLedger
+from src.budget import BudgetExceeded, BudgetLedger, PaidBudgetLedger
 from src.prepaid import COSTS, Denied, Ledger, integer
 
 
@@ -87,9 +87,14 @@ class Gateway:
                 except Denied:
                     optional_web = False
             if optional_web:
+                assert search_rid is not None
                 try:
-                    holds = self.budget.reserve_many(
-                        {"luna": COSTS["chat"], "extras": COSTS["search"]}
+                    holds = (
+                        self.budget.reserve_paid(self.ledger, [rid, search_rid])
+                        if isinstance(self.budget, PaidBudgetLedger)
+                        else self.budget.reserve_many(
+                            {"luna": COSTS["chat"], "extras": COSTS["search"]}
+                        )
                     )
                     budget_holds = {hold.bucket: hold for hold in holds}
                 except BudgetExceeded:
@@ -99,7 +104,11 @@ class Gateway:
                     optional_web = False
             if not budget_holds:
                 bucket = "luna" if feature == "chat" else "extras"
-                budget_holds[bucket] = self.budget.reserve(bucket, COSTS[feature])
+                budget_holds[bucket] = (
+                    self.budget.reserve_paid(self.ledger, [rid])[0]
+                    if isinstance(self.budget, PaidBudgetLedger)
+                    else self.budget.reserve(bucket, COSTS[feature])
+                )
             if search or optional_web:
                 request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
                 request["tool_choice"] = "required" if search else "auto"
@@ -141,6 +150,11 @@ class Gateway:
                 max_tool_calls=1,
                 parallel_tool_calls=False,
             )
+            # Counting awaited network I/O. Re-check launch permission and the
+            # authenticated snapshot immediately before durable dispatch.
+            if ai_disabled(parse_ai_access_mode(os.environ), "paid dispatch"):
+                raise Denied("I can't do that right now.")
+            self.ready()
             if optional_web:
                 assert search_rid is not None
                 self.ledger.dispatch_many([rid, search_rid])
@@ -246,7 +260,11 @@ class Gateway:
         rid = self.ledger.reserve(guild, user, "images")
         budget_hold = None
         try:
-            budget_hold = self.budget.reserve("extras", COSTS["images"])
+            budget_hold = (
+                self.budget.reserve_paid(self.ledger, [rid])[0]
+                if isinstance(self.budget, PaidBudgetLedger)
+                else self.budget.reserve("extras", COSTS["images"])
+            )
             self.ledger.dispatch(rid)
         except BaseException:
             self.ledger.cancel(rid)

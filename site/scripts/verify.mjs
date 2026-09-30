@@ -72,7 +72,7 @@ if (saleStatus === 'live') {
   for (const [sku, product] of Object.entries({ '1554920142532513832': 'Basic', '1554920641088593990': 'Plus', '1554920977488551936': 'Premium' })) {
     check(plansPage.includes(`https://discord.com/application-directory/1365724363722068120/store/${sku}`), `${product} links to its reviewed Discord SKU`);
   }
-  for (const phrase of ['shared across this server', 'does not roll over', 'no overage charges', 'Cancel any time in Discord subscription settings', 'free trial', 'image edits', 'image hosting', 'Daily availability limits also apply; temporarily unavailable features resume as capacity resets']) check(plansPage.toLowerCase().includes(phrase.toLowerCase()), `live plans disclose ${phrase}`);
+  for (const phrase of ['shared across this server', 'authenticated Discord billing period', 'refreshes each allowance once', 'access and remaining allowance continue through the current paid period', 'does not roll over', 'no overage charges', 'Cancel any time in Discord subscription settings', 'free trial', 'image edits', 'image hosting', 'unknown provider usage may use an attempt']) check(plansPage.toLowerCase().includes(phrase.toLowerCase()), `live plans disclose ${phrase}`);
   const supportPage = await read(path.join(out, 'support/index.html'));
   check(supportPage.includes('Manage your AI subscription') && supportPage.includes('Subscriptions in Discord'), 'live support explains how to manage Discord subscriptions');
   check(!/not available for purchase yet|no purchase or charge can occur/i.test(plansPage), 'live plans do not carry inactive-checkout messaging');

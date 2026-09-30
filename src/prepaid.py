@@ -15,7 +15,7 @@ import uuid
 import weakref
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import Condition, Lock, get_ident
 from typing import Callable
@@ -321,13 +321,25 @@ class Ledger:
         product = PRODUCTS.get(grant.product)
         expected = (
             f"discord-access:{grant.application_id}:{grant.entitlement_id}:"
-            f"{grant.subscription_id}:{grant.starts}:{grant.ends}"
+            f"{grant.subscription_id}:{grant.starts}"
+        )
+        # Existing receipts include the originally issued end. Keep that opaque
+        # key forever: requests and reviewed reversals refer to it. Its suffix
+        # need not track a corrected expiry, but must still be a valid old key.
+        if not isinstance(grant.receipt_id, str) or len(grant.receipt_id) > 180:
+            raise Denied("Discord access period cannot fund this allowance.")
+        legacy_end = grant.receipt_id.removeprefix(expected + ":")
+        legacy_receipt = (
+            grant.receipt_id.startswith(expected + ":")
+            and legacy_end.isascii()
+            and legacy_end.isdigit()
+            and legacy_end == str(int(legacy_end))
+            and grant.starts < int(legacy_end) <= grant.starts + 32 * 86400
         )
         if (
             product is None
             or product.kind != "subscription"
-            or grant.receipt_id != expected
-            or len(expected) > 180
+            or (grant.receipt_id != expected and not legacy_receipt)
             or not grant.starts < grant.ends
             or grant.ends - grant.starts > 32 * 86400
         ):
@@ -343,13 +355,25 @@ class Ledger:
         if grant.ends <= self.clock():
             raise Denied("Discord access period has ended.")
         old = db.execute(
-            "SELECT payment,revoked FROM prepaid_grants WHERE receipt=?", (grant.receipt_id,)
+            "SELECT * FROM prepaid_grants WHERE receipt=?", (grant.receipt_id,)
         ).fetchone()
         if old:
-            if old["payment"] != encoded:
+            # Only expiry is mutable. Never rewrite usage, limits, storage,
+            # receipt identity or revocation when Discord corrects period_end.
+            previous = replace(grant, ends=old["ends"])
+            if (
+                old["payment"] != self.access_payload(previous)
+                or old["guild"] != grant.guild_id
+                or old["product"] != grant.product
+                or old["starts"] != grant.starts
+            ):
                 raise Denied("Discord access period was assigned different facts.")
             if old["revoked"]:
                 raise Denied("Revoked Discord access cannot be restored.")
+            db.execute(
+                "UPDATE prepaid_grants SET ends=?,payment=? WHERE receipt=?",
+                (grant.ends, encoded, grant.receipt_id),
+            )
             return False
         product = PRODUCTS[grant.product]
         db.execute(
