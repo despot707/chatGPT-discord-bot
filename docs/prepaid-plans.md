@@ -1,6 +1,6 @@
 # Prepared plans and cost controls
 
-**Status: implemented preparation branch, sales OFF. No live Discord SKUs or checkout integration.**
+**Status: implemented preparation branch, sales OFF. Includes prepaid controls and Discord guild-subscription reconciliation; no live SKU mapping or checkout is configured.**
 Prices below are proposed USD per server, excluding separately collected taxes. Changes require a cost review before sale. There is no invented bot name in the commercial UI.
 
 ## Included allowances
@@ -58,11 +58,19 @@ Paid deployments are single-writer Linux processes with an exclusive file lease,
 
 After a storage downgrade or subscription/add-on expiry, new growth beyond the new limit is rejected immediately. A persisted 48-hour grace period allows export/cleanup. Then oldest chat/party/link records, followed by profile records if necessary, are removed until within quota. This must be disclosed and approved before launch, with migration and backup-retention testing. The maintenance worker runs hourly only in explicitly approved enforce mode. It never executes in preview/off mode. Native backups are a separate operator obligation.
 
+## Discord subscription reconciliation
+
+The optional Discord adapter observes authenticated guild-subscription entitlements and subscription periods. `DISCORD_PURCHASE_MODE=off` is the default and preserves the personal bot. `observe` records current access but never funds prepaid credits. `enforce` may credit only an exact period backed by a separately imported, operator-reviewed settlement record. Paid operation additionally requires `PREPAID_MODE=enforce`, a complete Discord snapshot no older than five minutes, and every existing prepaid approval/evidence gate. Keep all approval flags false until independently verified.
+
+Only explicitly mapped guild subscription SKUs for Basic, Plus, or Premium are supported. Test entitlements, gifts, add-on SKUs, unknown products, and client-supplied claims do not fund credits. Renewals need a distinct reviewed receipt for the new exact subscription period. Entitlement/subscription create, update, and delete events request a fresh REST reconciliation; the client also reconciles at startup and at least once per minute. A failed/incomplete walk cannot refresh the current-snapshot gate. If a previously credited period no longer matches current access, its adapter-owned grant is revoked. This is access reconciliation, not proof of the amount Discord paid.
+
+The import utility records a SHA-256 hash and reference for externally inspected invoice evidence; it does not fetch or verify a financial export. There is no validated official export schema or automatic financial verification. An operator must independently inspect the invoice/settlement, confirm exact gross and net USD, receipt identity, guild, entitlement, subscription, mapped SKU/product and period, then explicitly confirm and import it. Do not assume a 65% net payout: the importer checks the configured minimum against independently entered net evidence. See [Discord purchase operations](discord-purchases.md) for the exact setup and import steps.
+
 ## Launch gate and what remains outside this code
 
 `PREPAID_MODE=off` preserves the existing personal bot. `preview` also preserves existing paid API behavior and only shows draft plans; IT IS NOT SPENDING PROTECTION. `enforce` enables the commercial checks. Missing, unapproved or older-than-seven-days operator evidence blocks paid activity. Native account limits are NOT set or proven by an evidence JSON file.
 
-Before enforce mode, complete Discord verification/monetization approvals and a genuine server-side receipt adapter with authenticated purchase verification, exact net amounts, currency, refunds, invoice renewal IDs and test-vs-paid separation. This release intentionally contains no credit-grant command, SKUs, live checkout or webhook accepting an unverified client claim. `Ledger.credit(Payment)` is an internal accounting boundary, not payment authentication.
+Before enforce mode, complete Discord verification/monetization approvals, configure real reviewed guild-subscription SKUs, and prepare the independent invoice evidence process described above. Discord entitlements establish access and period identity; they do not establish invoice amounts, immutable invoice status, refunds, or net revenue. There is no automatic financial export importer or live checkout in this release. `Ledger.credit(Payment)` is an internal accounting boundary, not payment authentication.
 
 Use a dedicated Railway project/workspace and dedicated OpenAI project/key for commercial traffic, one replica/process, and verify CPU/RAM/volume ceilings and native hard caps. Railway compute and Agent caps are separate. Set actual caps in the native UI/CLI; do not confuse plan hardware maxima, alerts, or defaults with configured monetary ceilings. Do not change unrelated workspace workloads.
 

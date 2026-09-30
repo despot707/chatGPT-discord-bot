@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 
 from src.aclient import BotRequestError
+from src.discord_purchases import DiscordPurchases, sku_map
 from src.prepaid import PRODUCTS, Denied
 from src.prepaid_runtime import SCOPE, PaidManager, PaidWeb, enforcing, runtime
 from src.profile_ui import private_notice
@@ -88,6 +89,8 @@ class PaidOperationError(BotRequestError, Denied):
 class PrepaidClientMixin(_PaidBase):
     def __init__(self, config, *args, **kwargs):
         paid = enforcing()
+        if paid and config.discord_purchase_mode != "enforce":
+            raise Denied("Paid mode requires authenticated Discord purchase reconciliation.")
         if paid:
             config = replace(
                 config,
@@ -101,6 +104,15 @@ class PrepaidClientMixin(_PaidBase):
                 steam_api_key=None,
             )
         super().__init__(config, *args, **kwargs)
+        self._discord_purchases = None
+        self._discord_purchase_task = None
+        self._discord_purchase_trigger = asyncio.Event()
+        if config.discord_purchase_mode != "off":
+            self._discord_purchases = DiscordPurchases(
+                runtime().ledger,
+                sku_map(config.discord_sku_map),
+                application_id=config.discord_application_id,
+            )
         if paid:
             runtime().acquire_process()
             self.provider_manager = PaidManager(self.provider_manager, runtime())
@@ -138,8 +150,54 @@ class PrepaidClientMixin(_PaidBase):
 
     async def on_ready(self):
         await super().on_ready()
+        if self._discord_purchases is not None and self._discord_purchase_task is None:
+            self._discord_purchase_task = asyncio.create_task(self._maintain_discord_purchases())
+        self._discord_purchase_trigger.set()
         if enforcing() and getattr(self, "_prepaid_maintenance", None) is None:
             self._prepaid_maintenance = asyncio.create_task(self._maintain_prepaid_storage())
+
+    async def _maintain_discord_purchases(self):
+        while True:
+            try:
+                purchases = self._discord_purchases
+                if purchases is None:
+                    return
+                self._discord_purchase_trigger.clear()
+                result = await purchases.reconcile(
+                    self, credit=self.config.discord_purchase_mode == "enforce"
+                )
+                logging.getLogger(__name__).info("Discord purchase reconciliation: %s", result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger(__name__).exception("Discord purchase reconciliation failed")
+            try:
+                await asyncio.wait_for(self._discord_purchase_trigger.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                pass
+
+    async def on_entitlement_create(self, entitlement):
+        self._discord_purchase_changed()
+
+    async def on_entitlement_update(self, entitlement):
+        self._discord_purchase_changed()
+
+    async def on_entitlement_delete(self, entitlement):
+        self._discord_purchase_changed()
+
+    async def on_subscription_create(self, subscription):
+        self._discord_purchase_changed()
+
+    async def on_subscription_update(self, subscription):
+        self._discord_purchase_changed()
+
+    async def on_subscription_delete(self, subscription):
+        self._discord_purchase_changed()
+
+    def _discord_purchase_changed(self):
+        if self._discord_purchases is not None:
+            self._discord_purchases.invalidate()
+        self._discord_purchase_trigger.set()
 
     async def _maintain_prepaid_storage(self):
         from src.prepaid_lifecycle import maintain_storage
@@ -172,6 +230,13 @@ class PrepaidClientMixin(_PaidBase):
             await asyncio.sleep(3600)
 
     async def close(self):
+        purchase_task = self._discord_purchase_task
+        if purchase_task is not None:
+            purchase_task.cancel()
+            try:
+                await purchase_task
+            except asyncio.CancelledError:
+                pass
         task = getattr(self, "_prepaid_maintenance", None)
         if task is not None:
             task.cancel()

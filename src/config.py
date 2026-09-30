@@ -92,6 +92,9 @@ class BotConfig:
     enable_long_term_memory: bool = False
     memory_database_path: str = "data/memory.sqlite3"
     memory_context_items: int = 12
+    discord_purchase_mode: str = "off"
+    discord_application_id: int = 0
+    discord_sku_map: str = ""
 
     @classmethod
     def from_env(
@@ -102,6 +105,14 @@ class BotConfig:
         if require_discord_token and not token:
             raise ValueError("Missing required environment variable: DISCORD_BOT_TOKEN")
         hard_budget_enabled = _bool(env, "HARD_BUDGET_ENABLED")
+        from src.discord_purchases import purchase_mode, sku_map
+
+        purchase = purchase_mode(env.get("DISCORD_PURCHASE_MODE", "off").strip().lower())
+        mapped_skus = env.get("DISCORD_SKU_MAP", "").strip()
+        sku_map(mapped_skus)
+        app_id = _int(env, "DISCORD_APPLICATION_ID", 0, minimum=0)
+        if purchase != "off" and (not mapped_skus or not app_id):
+            raise ValueError("Discord purchase observation requires application ID and SKU map")
         default_provider = "openai" if hard_budget_enabled else "gemini"
         provider = env.get("DEFAULT_PROVIDER", default_provider).strip().lower() or default_provider
         if provider == "free":
@@ -178,6 +189,9 @@ class BotConfig:
                 memory_database_path=env.get("MEMORY_DATABASE_PATH", "").strip()
                 or "data/memory.sqlite3",
                 memory_context_items=_int(env, "MEMORY_CONTEXT_ITEMS", 12, minimum=1),
+                discord_purchase_mode=purchase,
+                discord_application_id=app_id,
+                discord_sku_map=mapped_skus,
             )
         except ValueError:
             raise

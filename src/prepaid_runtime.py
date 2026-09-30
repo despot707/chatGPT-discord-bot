@@ -77,6 +77,18 @@ class Runtime:
 
     def ready(self):
         data = self.evidence()
+        from src.discord_purchases import PurchaseDenied, assert_purchase_current, sku_map
+
+        if os.getenv("DISCORD_PURCHASE_MODE", "off") != "enforce":
+            raise PurchaseDenied(
+                "Paid access requires authenticated Discord purchase reconciliation."
+            )
+        assert_purchase_current(
+            self.ledger,
+            integer(int(os.getenv("DISCORD_APPLICATION_ID", "0")), 1),
+            sku_map(os.getenv("DISCORD_SKU_MAP", "")),
+            clock=self.clock,
+        )
         for key in (
             "approved",
             "receipts_verified",

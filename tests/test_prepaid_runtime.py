@@ -42,7 +42,13 @@ def test_unreviewed_launch_is_locked(tmp_path):
         rt.ready()
 
 
-def test_revenue_must_cover_hosting_not_just_ai(tmp_path):
+def test_revenue_must_cover_hosting_not_just_ai(tmp_path, monkeypatch):
+    # This unit isolates the hosting calculation; purchase binding is exercised
+    # by the Discord reconciliation lifecycle tests.
+    monkeypatch.setenv("DISCORD_PURCHASE_MODE", "enforce")
+    monkeypatch.setenv("DISCORD_APPLICATION_ID", "222")
+    monkeypatch.setenv("DISCORD_SKU_MAP", "111:basic")
+    monkeypatch.setattr("src.discord_purchases.assert_purchase_current", lambda *args, **kw: None)
     data = manifest(
         approved=True,
         receipts_verified=True,

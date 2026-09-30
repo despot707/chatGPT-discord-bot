@@ -40,8 +40,17 @@ async def test_enforce_interaction_blocked_without_revenue(monkeypatch, tmp_path
     fake.ready.side_effect = Denied("Not approved")
     monkeypatch.setattr(pr, "_INSTANCE", fake)
     monkeypatch.setattr(pr, "free_interaction_allowed", lambda *args: True)
+    monkeypatch.setattr("src.prepaid_client.DiscordPurchases", lambda *args, **kwargs: Mock())
     legacy = Manager()
-    client = DiscordClient(BotConfig(discord_bot_token="x"), provider_manager=legacy)
+    client = DiscordClient(
+        BotConfig(
+            discord_bot_token="x",
+            discord_purchase_mode="enforce",
+            discord_application_id=222,
+            discord_sku_map="111:basic",
+        ),
+        provider_manager=legacy,
+    )
     assert isinstance(client.provider_manager, PaidManager)
     client._register_prepaid_commands()
     target = interaction()
@@ -65,9 +74,17 @@ async def test_mention_response_cannot_bypass_request_slot(monkeypatch, tmp_path
     fake.core.side_effect = Denied("No paid plan")
     monkeypatch.setattr(pr, "_INSTANCE", fake)
     monkeypatch.setattr(pr, "free_interaction_allowed", lambda *args: True)
+    monkeypatch.setattr("src.prepaid_client.DiscordPurchases", lambda *args, **kwargs: Mock())
     legacy = Manager()
     client = DiscordClient(
-        BotConfig(discord_bot_token="x", chat_database_path=None), provider_manager=legacy
+        BotConfig(
+            discord_bot_token="x",
+            chat_database_path=None,
+            discord_purchase_mode="enforce",
+            discord_application_id=222,
+            discord_sku_map="111:basic",
+        ),
+        provider_manager=legacy,
     )
     with pytest.raises(Exception, match="No paid plan"):
         await client.respond((1, 2, 3), "hello", private=False)
