@@ -172,6 +172,22 @@ def test_local_wait_does_not_spend_sqlite_retry_budget(ledger, monkeypatch):
         assert result.result(timeout=5)
 
 
+def test_local_admission_timeout_keeps_queue_and_allowance_usable(ledger, monkeypatch):
+    ledger.credit(payment())
+    monkeypatch.setattr(prepaid, "SQLITE_ADMISSION_TIMEOUT_SECONDS", 0.05)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with ledger.db():
+            started = monotonic()
+            result = pool.submit(ledger.reserve, 1, 2, "chat")
+            with pytest.raises(sqlite3.OperationalError, match="local prepaid database admission"):
+                result.result(timeout=2)
+            assert monotonic() - started < 1
+
+    assert ledger.summary(1)["remaining"]["chat"] == PRODUCTS["basic"].allowances["chat"]
+    assert ledger.reserve(1, 2, "chat")
+
+
 def test_nested_local_transaction_fails_without_deadlock(ledger):
     with ledger.db():
         with pytest.raises(RuntimeError, match="Nested prepaid transactions"):

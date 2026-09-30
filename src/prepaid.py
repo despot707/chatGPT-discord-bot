@@ -34,6 +34,7 @@ MIB = 1024**2
 SQLITE_BUSY_TIMEOUT_MS = 250
 SQLITE_BODY_BUSY_TIMEOUT_MS = 10000
 SQLITE_BEGIN_RETRY_SECONDS = 30
+SQLITE_ADMISSION_TIMEOUT_SECONDS = 30
 
 
 class _Admission:
@@ -47,13 +48,19 @@ class _Admission:
     @contextmanager
     def enter(self):
         ticket = object()
+        deadline = time.monotonic() + SQLITE_ADMISSION_TIMEOUT_SECONDS
         with self.condition:
             if self.owner == get_ident():
                 raise RuntimeError("Nested prepaid transactions on one database are unsupported")
             self.waiters.append(ticket)
             try:
                 while self.waiters[0] is not ticket:
-                    self.condition.wait()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise sqlite3.OperationalError(
+                            "Timed out waiting for local prepaid database admission"
+                        )
+                    self.condition.wait(timeout=remaining)
             except BaseException:
                 self.waiters.remove(ticket)
                 self.condition.notify_all()
