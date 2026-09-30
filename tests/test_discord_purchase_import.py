@@ -133,12 +133,14 @@ def test_cli_rejects_malformed_json_and_missing_evidence(tmp_path, monkeypatch):
 def test_cli_replay_is_idempotent_but_changed_receipt_facts_are_denied(
     tmp_path, monkeypatch, capsys
 ):
-    first = _invoke(tmp_path, monkeypatch, _record())
+    # A replay must retain the original period, even across a wall-clock second.
+    record = _record()
+    first = _invoke(tmp_path, monkeypatch, record)
     assert first[0] == 0
-    assert _invoke(tmp_path, monkeypatch, _record())[0] == 0
+    assert _invoke(tmp_path, monkeypatch, record)[0] == 0
     assert "already staged unchanged" in capsys.readouterr().out
 
-    changed = _record(net_micros=650000)
+    changed = {**record, "net_micros": 650000}
     with pytest.raises(SystemExit) as error:
         _invoke(tmp_path, monkeypatch, changed)
     assert error.value.code == 2
