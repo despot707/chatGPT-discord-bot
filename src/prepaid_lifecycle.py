@@ -84,9 +84,9 @@ def maintain_storage(ledger: Ledger, paths: dict[str, str], *, now: int) -> dict
                     continue
                 if now - int(row[0]) < 48 * 3600:
                     continue
-            # Prefer temporary conversation/party records over deliberate profile
-            # settings. Small bounded deletes avoid holding locks indefinitely.
-            for kind in ("chat", "gaming", "profiles"):
+            # Paid expiry must not erase the free profile and game/team tools.
+            # Only temporary paid conversation records are eligible for pruning.
+            for kind in ("chat",):
                 path = paths.get(kind, "")
                 if not path or not Path(path).is_file():
                     continue

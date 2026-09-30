@@ -2,7 +2,7 @@
 
 Last audited: 2026-09-30
 
-The custom-domain [Privacy Policy](https://sidecord-ai.com/privacy/), [Terms](https://sidecord-ai.com/terms/), and [Support](https://sidecord-ai.com/support/) routes were verified on September 30, 2026 as part of production revision `c760ffc8`; tested public assets and routes matched the local build byte for byte. Cloudflare's domain API reports association, verification, and validation active. Analytics was disabled with the owner's approval; Cloudflare reports “RUM is currently disabled for this zone,” and the live routes contain no `static.cloudflareinsights.com` injection. Developer Portal metadata and the separate Terms and Privacy URLs were saved and persisted after reload. The website/support address appears in the General Information description suffix; there are no separate Website or Support fields. The refreshed App Verification checklist passes metadata, Terms, Privacy, install, and email/2FA. The Sidecord Ai team exists and its Stripe payout page reports completed setup; the app remains personally owned while its submitted team transfer waits for fresh MFA. App verification and Premium Apps activation are not complete. See [commercial-launch.md](commercial-launch.md) for the observed portal and deployment state and remaining launch gates. Public policies do not establish Premium Apps approval.
+The custom-domain [Privacy Policy](https://sidecord-ai.com/privacy/), [Terms](https://sidecord-ai.com/terms/), and [Support](https://sidecord-ai.com/support/) routes were verified on September 30, 2026 as part of production revision `85b7a20d`; tested public assets and routes matched the local build byte for byte. Cloudflare's domain API reports association, verification, and validation active. Analytics was disabled with the owner's approval; Cloudflare reports “RUM is currently disabled for this zone,” and the live routes contain no `static.cloudflareinsights.com` injection. Developer Portal metadata and the separate Terms and Privacy URLs were saved and persisted after reload. The website/support address appears in the General Information description suffix; there are no separate Website or Support fields. Team ownership and 2FA are green. App Verification currently says **Identity Verification Needs Action** and offers the owner **Verify Me** at [Discord's verification flow](https://discord.com/developers/applications/1365724363722068120/verification-onboarding). Team Stripe payout setup is complete; Stripe Identity is a separate pending verification step. App verification and Premium Apps activation are not complete. The owner must complete legal/eligibility attestations. See [commercial-launch.md](commercial-launch.md) for the observed portal and deployment state and remaining launch gates. Public policies do not establish Premium Apps approval.
 
 ## Implemented in the application
 
@@ -22,16 +22,16 @@ The custom-domain [Privacy Policy](https://sidecord-ai.com/privacy/), [Terms](ht
 These cannot be completed by application code and must be confirmed in the Discord Developer Portal:
 
 1. App is verified. **Pending.**
-2. App is owned by a Discord Developer Team. **Pending transfer authentication:** Sidecord Ai team exists, with `despot707` as sole member/owner; the app transfer is waiting for Discord's fresh MFA challenge.
-3. Team owner is at least 18 and in a supported Premium Apps locale. **Not verified.**
-4. Team owner and every team member have verified email and 2FA. **App Verification checklist passes.**
+2. App is owned by a Discord Developer Team. **GREEN:** team ownership is confirmed.
+3. Team owner is at least 18 and in a supported Premium Apps locale. **Owner must verify/attest.**
+4. Team owner and every team member have verified email and 2FA. **GREEN:** App Verification checklist passes.
 5. App uses slash commands and, where required, has approval for privileged Message Content access.
 6. General Information Terms of Service URL points to the current public Terms. **Saved and verified after reload.**
 7. General Information Privacy Policy URL points to the current public Privacy Policy. **Saved and verified after reload.**
 8. App name and general description are saved as **Sidecord Ai** and the recorded product summary; tags are `ai`, `chatbot`, `community`, `gaming`, and `utilities`. Metadata and content checks are green. SKU names/descriptions/artwork and Store Page still require review before monetization.
 9. The General Information description ends with `Website and support: https://sidecord-ai.com`; website and support are not separate Developer Portal fields. The public GitHub issue route is enabled; confirm the operator identity and a private escalation contact before launch.
-10. Payout Settings are completed with a valid payment method. **Team page reports “Payout info added!” with Stripe.** Recheck the app's recognition of this setup after its transfer completes.
-11. Team owner accepts Discord Monetization Terms and Monetization Policy.
+10. Payout Settings are completed with a valid payment method. **GREEN:** Team page reports “Payout info added!” with Stripe. This is separate from pending Stripe Identity owner verification.
+11. Team owner accepts Discord Monetization Terms and Monetization Policy. **Owner action required.**
 12. The Developer Portal Premium Apps eligibility checklist is fully green.
 13. Any required App Review/Message Content review accurately describes recent-context use and member-controlled profiles.
 14. The operator reviews Discord's then-current Developer, Monetization, Community, and Premium Apps policies immediately before launch.

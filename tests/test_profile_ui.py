@@ -1,7 +1,7 @@
 import importlib.util
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -109,6 +109,24 @@ async def test_timeout_error_stays_private(tmp_path):
     args = i.response.send_message.call_args
     assert args.kwargs["ephemeral"]
     assert "secret database path" not in str(args)
+
+
+@pytest.mark.asyncio
+async def test_paid_storage_denial_stays_generic_in_profile_forms(tmp_path, monkeypatch):
+    from src import profile_ui
+    from src.prepaid import Denied
+
+    monkeypatch.setenv("PREPAID_MODE", "enforce")
+    notice = AsyncMock()
+    monkeypatch.setattr(profile_ui, "private_notice", notice)
+    p = panel(tmp_path)
+    p.client.profile_store.apply = Mock(side_effect=Denied("private quota details"))
+    i = interaction()
+    await p.save(i, "birthday", {"month": 1, "day": 2})
+    assert notice.await_args.args[1] == "I can't do that right now."
+    modal = modules()[2](p)
+    await modal.on_error(i, Denied("private quota details"))
+    assert notice.await_args.args[1] == "I can't do that right now."
 
 
 @pytest.mark.asyncio

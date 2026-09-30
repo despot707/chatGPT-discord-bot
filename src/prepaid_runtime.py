@@ -16,7 +16,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Callable
 
-from src.prepaid import Denied, Ledger, integer
+from src.prepaid import FREE_STORAGE_BYTES, Denied, Ledger, integer
 from src.prepaid_gateway import Gateway
 
 SCOPE: ContextVar[tuple[int, int, int] | None] = ContextVar("paid_scope", default=None)
@@ -114,7 +114,9 @@ class Runtime:
             )
 
     def core(self, guild: int, user: int):
-        self.ready()
+        """Bound local, code-based operations without a paid entitlement."""
+        integer(guild, 1)
+        integer(user, 1)
         now = time.monotonic()
         key = (guild, user)
         if now < self._recent.get(key, 0):
@@ -124,10 +126,6 @@ class Runtime:
             if len(self._recent) >= 2000:
                 raise Denied("The service is busy. Please try again shortly.")
         self._recent[key] = now + 1
-        rid = self.ledger.reserve(guild, user, "core")
-        self.ledger.dispatch(rid)
-        # This is a cost allocation, not a claim to have measured Railway CPU.
-        self.ledger.settle(rid, 50)
 
     def model_gateway(self) -> Gateway:
         self.ready()
@@ -255,7 +253,8 @@ def reserve_table(db, guild: int, kind: str):
     """Reserve prospective serialized payload+row metadata before DB commit.
 
     A failed commit deliberately leaves a conservative reservation. A later
-    successful operation reconciles it. Deletes remain usable without a plan.
+    successful operation reconciles it. Local profile/game writes have a
+    bounded free allowance; chat and excess storage need paid launch readiness.
     """
     if not enforcing():
         return None
@@ -274,7 +273,17 @@ def reserve_table(db, guild: int, kind: str):
         ).fetchone()
         old = row[0] if row else 0
     if size > old:
-        rt.ready()
+        if kind == "chat":
+            rt.ready()
+        else:
+            with rt.ledger.db() as ledger_db:
+                other = ledger_db.execute(
+                    "SELECT COALESCE(SUM(bytes),0) FROM prepaid_storage "
+                    "WHERE guild=? AND object_key IN ('profiles','gaming') AND object_key!=?",
+                    (guild, kind),
+                ).fetchone()[0]
+            if other + size > FREE_STORAGE_BYTES:
+                rt.ready()
         rt.ledger.storage(guild, kind, size)
     return (guild, kind, size)
 

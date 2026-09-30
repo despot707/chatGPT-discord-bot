@@ -1,7 +1,13 @@
 # Prepared plans and cost controls
 
-**Status: implemented preparation branch, sales OFF. Includes prepaid controls and Discord guild-subscription reconciliation; no live SKU mapping or checkout is configured.**
-Prices below are proposed USD per server, excluding separately collected taxes. Changes require a cost review before sale. There is no invented bot name in the commercial UI.
+**Status: implemented preparation branch; AI purchases are not enabled. No approved SKUs, live checkout, or supported add-ons are configured.**
+Prices and finite AI allowances below are unchanged planning values in USD per server, excluding any separately collected taxes. They are not offers for sale. No purchase can be made and no automatic charge occurs. Review the owner-facing boundaries in [commercial-launch.md](commercial-launch.md) before launch.
+
+## Free tier and paid boundary
+
+The service has an ongoing free tier; it is not a trial and does not include free AI credits. Profiles and code-only game, party, and team features are free and are not measured against the paid AI allowances. The combined free profile and game-record baseline is 1 MiB per server. Paid storage quotas in the plan table are additive and apply to paid AI/chat data and optional capacity above the free baseline. No free operation quota is advertised.
+
+The lowest paid plan begins AI access. Paid AI features are chat, advanced reasoning, web search, and image generation, with finite per-period allowances. Basic has chat only; Plus and Premium include the additional AI types shown below. Exhaustion pauses the applicable AI feature until a future eligible period or a supported purchase becomes available. There are no overages, automatic refills, rollover, trials, or automatically charged purchases. AI purchases are not currently enabled.
 
 ## Included allowances
 
@@ -11,7 +17,9 @@ Prices below are proposed USD per server, excluding separately collected taxes. 
 | Plus | $4.99 | 500 | 50 | 10 | 3 | 5000 | 20 MiB |
 | Premium | $9.99 | 1000 | 100 | 20 | 10 | 10000 | 100 MiB |
 
-## Optional add-ons
+## Unsupported add-ons (internal planning only; not for sale)
+
+These proposed items have no approved SKUs or supported checkout and must not appear as purchasable offers. Keep their values here only for internal cost/control planning.
 
 | Add-on | One-time price | Additional allowance |
 |---|---:|---|
@@ -30,8 +38,8 @@ Add-ons require an active base subscription, are bound to one selected server, a
 - Web search: one explicit request with at most one native search tool call, not unlimited research. Uses gpt-4.1-mini because its non-preview search content is billed in a fixed 8,000-token block. Includes the summary; does not also consume ordinary chat. Search and reasoning are separate calls, not a hidden combined job.
 - Image: one fixed GPT Image 2 snapshot, 1024x1024, medium quality, JPEG; at most 2,000 UTF-8 prompt bytes; no edits, additional variants, auto size/quality, or partial streaming. Image activation still requires availability/price/usage-field verification on the actual account.
 - Server operations: request-slot admissions, game/player/party/team commands and profile writes. Some compound flows use more than one operation. Core tools do not call an LLM unless explicitly requested. Privacy inspection/deletion and plan help are not paid; they are rate-limited to prevent abuse.
-- Saved data: encoded member settings, bot conversation turns, party/Steam-link records, plus 256 bytes/row for metadata. Not a count of inactive Discord members. Shared game catalog and branding are operator infrastructure, not charged to every server. No file uploads or indefinite image hosting are included.
-- Direct public-link summaries: ordinary chat plus an admitted server operation, one existing bounded page fetch. They are not unlimited browsing and do not invoke an additional paid search engine. Third-party paid search, voice, code execution and new unmetered tools are disabled in commercial mode.
+- Paid saved data: the plan-table allowance adds to the separate 1 MiB per-server free baseline and can hold bot conversation turns and optional profile/game records above that baseline, plus 256 bytes/row for metadata. It is not a count of inactive Discord members. Shared game catalog and branding are operator infrastructure, not charged to every server. No file uploads or indefinite image hosting are included.
+- Direct public-link summaries: ordinary chat plus an admitted server operation, one existing bounded page fetch. They are not unlimited browsing and do not invoke an additional paid search engine. Voice is unsupported and is not included or promised. Third-party paid search, code execution and new unmetered tools are disabled in commercial mode.
 
 ## Economics validated in code
 
@@ -56,7 +64,7 @@ BEGIN IMMEDIATE transactions reserve allowance before dispatch. Parallel request
 
 Paid deployments are single-writer Linux processes with an exclusive file lease, at most two generation requests at once, capped input/output/context, per-user cooldowns, bounded UI/autocomplete frequency and finite ledger/database sizes. No API key is exposed or changed. Writes reserve aggregate per-server data bytes before commit. Failed commits over-reserve rather than hide usage. Cleanup reconciles actual live records.
 
-After a storage downgrade or subscription/add-on expiry, new growth beyond the new limit is rejected immediately. A persisted 48-hour grace period allows export/cleanup. Then oldest chat/party/link records, followed by profile records if necessary, are removed until within quota. This must be disclosed and approved before launch, with migration and backup-retention testing. The maintenance worker runs hourly only in explicitly approved enforce mode. It never executes in preview/off mode. Native backups are a separate operator obligation.
+After a storage downgrade or subscription expiry, new growth beyond the paid limit is rejected immediately. A persisted 48-hour grace period allows export/cleanup. Paid chat history may be removed to fit the remaining paid allowance. Profile and game records are never deleted solely because paid storage expires; if they exceed the free 1 MiB baseline, they remain available read-only until the records fit the free baseline or paid capacity returns. This must be disclosed and approved before launch, with migration and backup-retention testing. The maintenance worker runs hourly only in explicitly approved enforce mode. It never executes in preview/off mode. Native backups are a separate operator obligation.
 
 ## Discord subscription reconciliation
 

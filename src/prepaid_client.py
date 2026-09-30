@@ -34,6 +34,7 @@ FREE_COMMANDS = {
     "birthday_forget",
     "birthday_scan_status",
     "private",
+    "budget",
 }
 NETWORK_COMMANDS = {"chat", "search", "browse", "draw", "remember"}
 CORE_COMMANDS = {
@@ -56,9 +57,8 @@ def product_text(product) -> str:
         "reasoning": "reasoning attempts",
         "search": "web searches",
         "images": "image attempts",
-        "core": "server operations",
     }
-    rows = [f"{n:,} {names[k]}" for k, n in product.allowances.items()]
+    rows = [f"{n:,} {names[k]}" for k, n in product.allowances.items() if k != "core"]
     if product.storage_bytes:
         rows.append(f"{product.storage_bytes // (1024**2):,} MiB saved data")
     return " · ".join(rows)
@@ -66,18 +66,24 @@ def product_text(product) -> str:
 
 def plan_embed() -> discord.Embed:
     e = discord.Embed(
-        title="Plans & optional add-ons",
-        description="**Preparation preview. Purchases are not enabled.**\nOne subscription per server. All allowances are shared by that server. No automatic overages.",
+        title="Free tools & AI plans",
+        description="**Preparation preview. Purchases are not enabled.**\nAI allowances are shared by each server. No automatic overages.",
+    )
+    e.add_field(
+        name="Free for every server",
+        value="Profiles and code-based game/team tools, with 1 MiB shared saved data.",
+        inline=False,
     )
     for p in PRODUCTS.values():
-        period = "/month" if p.kind == "subscription" else " · add-on · 30 days"
+        if p.kind != "subscription":
+            continue
         e.add_field(
-            name=f"{p.name} · ${p.price_cents // 100}.{p.price_cents % 100:02d}{period}",
+            name=f"{p.name} · ${p.price_cents // 100}.{p.price_cents % 100:02d}/month",
             value=product_text(p),
             inline=False,
         )
     e.set_footer(
-        text="Top-ups require an active plan. Chat: 8,000 input / 500 output tokens. Reasoning: 2,000 total output. One search or image per attempt. Tool availability must pass launch review."
+        text="AI chat: 8,000 input / 500 output tokens. Reasoning: 2,000 total output. One search or image per attempt. Tool availability must pass launch review."
     )
     return e
 
@@ -143,7 +149,8 @@ class PrepaidClientMixin(_PaidBase):
                         runtime().ledger.assert_active(interaction.guild_id or 0)
                     return True
                 except Denied as exc:
-                    await private_notice(interaction, str(exc))
+                    logging.getLogger(__name__).info("Commercial command denied: %s", exc)
+                    await private_notice(interaction, "I can't do that right now.")
                     return False
 
             setattr(self.tree, "interaction_check", check)
@@ -256,7 +263,7 @@ class PrepaidClientMixin(_PaidBase):
 
         @app_commands.command(
             name="plans",
-            description="Privately preview plans, exact allowances and optional add-ons. No purchase occurs.",
+            description="Privately view free tools and preview paid AI plans. No purchase occurs.",
         )
         async def plans(interaction: discord.Interaction):
             await interaction.response.send_message(
@@ -289,7 +296,6 @@ class PrepaidClientMixin(_PaidBase):
                     ("reasoning", "Advanced reasoning"),
                     ("search", "Web searches"),
                     ("images", "Image generation"),
-                    ("core", "Server operations"),
                 ]:
                     e.add_field(
                         name=label,
@@ -321,10 +327,6 @@ class PrepaidClientMixin(_PaidBase):
         async with super()._request_slot(scope, conv):
             token = None
             if enforcing():
-                try:
-                    runtime().core(scope[0], scope[2])
-                except (Denied, OSError) as exc:
-                    raise PaidOperationError(str(exc)) from None
                 token = SCOPE.set(scope)
             try:
                 yield

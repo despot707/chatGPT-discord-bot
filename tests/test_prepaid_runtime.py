@@ -42,6 +42,15 @@ def test_unreviewed_launch_is_locked(tmp_path):
         rt.ready()
 
 
+def test_local_core_is_free_but_rate_limited(tmp_path):
+    rt, ledger = make(tmp_path, manifest())
+    rt.core(1, 2)
+    with pytest.raises(Denied):
+        rt.core(1, 2)
+    with ledger.db() as db:
+        assert db.execute("SELECT COUNT(*) FROM prepaid_requests").fetchone()[0] == 0
+
+
 def test_revenue_must_cover_hosting_not_just_ai(tmp_path, monkeypatch):
     # This unit isolates the hosting calculation; purchase binding is exercised
     # by the Discord reconciliation lifecycle tests.

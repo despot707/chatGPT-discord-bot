@@ -31,6 +31,7 @@ class Denied(ValueError):
 # 1024-square medium GPT Image 2 image + at most 2,000 UTF-8 prompt bytes.
 COSTS = {"chat": 1500, "reasoning": 3000, "search": 40000, "images": 80000, "core": 50}
 MIB = 1024**2
+FREE_STORAGE_BYTES = MIB  # Combined profile and gaming records per server.
 SQLITE_BUSY_TIMEOUT_MS = 250
 SQLITE_BODY_BUSY_TIMEOUT_MS = 10000
 SQLITE_BEGIN_RETRY_SECONDS = 30
@@ -428,16 +429,33 @@ class Ledger:
             ).fetchone()
             previous = old[0] if old else 0
             if size > previous:
-                rows = self._active(db, guild)
+                try:
+                    rows = self._active(db, guild)
+                except Denied:
+                    rows = []
                 used = db.execute(
                     "SELECT COALESCE(SUM(bytes),0) FROM prepaid_storage WHERE guild=?", (guild,)
+                ).fetchone()[0]
+                free_used = db.execute(
+                    "SELECT COALESCE(SUM(bytes),0) FROM prepaid_storage "
+                    "WHERE guild=? AND object_key IN ('profiles','gaming')",
+                    (guild,),
                 ).fetchone()[0]
                 all_used = db.execute(
                     "SELECT COALESCE(SUM(bytes),0) FROM prepaid_storage"
                 ).fetchone()[0]
+                free_record = key in ("profiles", "gaming")
+                within_free = free_record and free_used - previous + size <= FREE_STORAGE_BYTES
+                paid_limit = sum(r["storage"] for r in rows)
                 if (
-                    used - previous + size > sum(r["storage"] for r in rows)
-                    or all_used - previous + size > self.storage_cap
+                    all_used - previous + size > self.storage_cap
+                    or (
+                        not free_record
+                        and (not rows or used - free_used - previous + size > paid_limit)
+                    )
+                    or (
+                        not within_free and used - previous + size > FREE_STORAGE_BYTES + paid_limit
+                    )
                 ):
                     raise Denied(
                         "Saved-data storage is full. Delete data or add storage; no automatic charge was made."
@@ -475,7 +493,7 @@ class Ledger:
                 "remaining": remaining,
                 "included": included,
                 "storage_used": storage,
-                "storage_limit": sum(r["storage"] for r in rows),
+                "storage_limit": FREE_STORAGE_BYTES + sum(r["storage"] for r in rows),
                 "plans": sorted({PRODUCTS[r["product"]].name for r in rows}),
                 "next_expiry": min((r["ends"] for r in rows), default=None),
             }

@@ -12,7 +12,9 @@ from typing import Any
 import discord
 from discord import ui
 
+from src.aclient import public_error_message
 from src.member_settings import StaleProfile, visible_profile
+from src.prepaid import Denied
 
 ACCENT = 0x818CF8
 SESSION_SECONDS = 600
@@ -367,7 +369,7 @@ class ProfilePanel(ui.LayoutView):
                     self.profile["revision"],
                 )
         except (ValueError, StaleProfile) as exc:
-            await private_notice(interaction, str(exc))
+            await private_notice(interaction, public_error_message(exc))
             return
         panel = ProfilePanel(
             self.client,
@@ -508,7 +510,9 @@ class _OwnedModal(ui.Modal):
         return await self.panel.authorized(interaction, modal=True)
 
     async def on_error(self, interaction, error, item=None):
-        if isinstance(error, ValueError):
+        if isinstance(error, Denied):
+            await private_notice(interaction, public_error_message(error))
+        elif isinstance(error, ValueError):
             await private_notice(interaction, str(error))
         else:
             await private_notice(

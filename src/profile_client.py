@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from src.aclient import BotRequestError
+from src.aclient import BotRequestError, public_error_message
 from src.member_settings import ProfileStore, validate_change, visible_profile
 from src.prepaid import Denied
 from src.profile_privacy import erase_legacy_records
@@ -186,7 +186,7 @@ class ProfileClientMixin(_ProfileBase):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except Denied as exc:
-            await private_notice(interaction, str(exc))
+            await private_notice(interaction, public_error_message(exc))
         except (ValueError, json.JSONDecodeError):
             await private_notice(
                 interaction,

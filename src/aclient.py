@@ -46,6 +46,10 @@ _BUDGET_ERROR_TERMS = (
 def public_error_message(error: BaseException) -> str:
     """Render a normal request failure without exposing provider or budget details."""
     if isinstance(error, Denied):
+        from src.prepaid_runtime import enforcing
+
+        if enforcing():
+            return PUBLIC_FAILURE
         return str(error)
     if isinstance(error, (ProviderError, BudgetError)):
         return PUBLIC_FAILURE
