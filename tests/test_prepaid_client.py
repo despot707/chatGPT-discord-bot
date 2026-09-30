@@ -197,3 +197,63 @@ def test_commercial_allowance_errors_are_generic_to_members(monkeypatch):
     )
     monkeypatch.setenv("PREPAID_MODE", "off")
     assert "Web search allowance" in public_error_message(Denied("Web search allowance"))
+
+
+@pytest.mark.asyncio
+async def test_storage_maintenance_waits_for_purchase_readiness_without_locking(monkeypatch):
+    import asyncio
+
+    from src import prepaid_client as pc
+
+    monkeypatch.setenv("PREPAID_MODE", "preview")
+    ledger = Mock()
+    runtime = Mock()
+    runtime.ledger = ledger
+    runtime.storage_ready.side_effect = [Denied("Purchase snapshot not ready"), True]
+    monkeypatch.setattr(pc, "runtime", lambda: runtime)
+    maintenance = Mock(return_value={"records_removed": 0})
+    monkeypatch.setattr("src.prepaid_lifecycle.maintain_storage", maintenance)
+
+    delays = []
+
+    async def stop_after_ready(delay):
+        delays.append(delay)
+        if len(delays) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(pc.asyncio, "sleep", stop_after_ready)
+    client = DiscordClient(BotConfig(discord_bot_token="x"), provider_manager=Manager())
+    with pytest.raises(asyncio.CancelledError):
+        await client._maintain_prepaid_storage()
+
+    assert delays == [5, 3600]
+    assert runtime.storage_ready.call_count == 2
+    maintenance.assert_called_once()
+    ledger.lock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_storage_maintenance_failure_still_locks_ledger(monkeypatch):
+    import asyncio
+
+    from src import prepaid_client as pc
+
+    monkeypatch.setenv("PREPAID_MODE", "preview")
+    ledger = Mock()
+    runtime = Mock()
+    runtime.ledger = ledger
+    runtime.storage_ready.return_value = True
+    monkeypatch.setattr(pc, "runtime", lambda: runtime)
+    maintenance = Mock(side_effect=OSError("database failure"))
+    monkeypatch.setattr("src.prepaid_lifecycle.maintain_storage", maintenance)
+
+    async def stop_after_failure(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(pc.asyncio, "sleep", stop_after_failure)
+    client = DiscordClient(BotConfig(discord_bot_token="x"), provider_manager=Manager())
+    with pytest.raises(asyncio.CancelledError):
+        await client._maintain_prepaid_storage()
+
+    maintenance.assert_called_once()
+    ledger.lock.assert_called_once_with("storage_maintenance_failed")

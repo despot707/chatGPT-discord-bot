@@ -48,6 +48,7 @@ def setup(tmp_path):
                     output_text="answer",
                     output=[],
                     model="gpt-6-luna",
+                    status="completed",
                     usage=NS(input_tokens=500, output_tokens=100),
                 )
             ),
@@ -129,13 +130,55 @@ async def test_unknown_usage_locks_gateway(setup):
 @pytest.mark.asyncio
 async def test_search_is_explicit_single_call_fixed_model(setup):
     g, ledger, c = setup
-    c.responses.create.return_value.output = [NS(type="web_search_call")]
+    c.responses.create.return_value.output = [NS(type="web_search_call", status="completed")]
     await g.complete(1, 3, [{"role": "user", "content": "search"}], search=True)
     args = c.responses.create.call_args.kwargs
     assert args["model"] == "gpt-6-luna" and args["max_tool_calls"] == 1
     assert args["tool_choice"] == "required"
     assert ledger.summary(1)["remaining"]["search"] == 19
     assert g.budget.snapshot()["extras"]["monthly_spent_micros"] == 40000
+
+
+@pytest.mark.asyncio
+async def test_search_accepts_completed_call_and_ignored_searching_attempt(setup):
+    g, ledger, c = setup
+    response = c.responses.create.return_value
+    response.usage = NS(input_tokens=5893, output_tokens=67)
+    response.output = [
+        NS(type="web_search_call", status="completed"),
+        NS(type="web_search_call", status="searching"),
+        NS(type="message", status="completed"),
+    ]
+    assert await g.complete(1, 3, [{"role": "user", "content": "search"}], search=True) == "answer"
+    assert ledger.summary(1)["remaining"]["search"] == 19
+    assert g.budget.snapshot()["extras"]["monthly_spent_micros"] == 40000
+    assert g.budget.snapshot()["reserved_micros"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_status", "call_statuses"),
+    [
+        ("completed", ["completed", "completed"]),
+        ("completed", ["completed", "unknown"]),
+        ("completed", ["completed", "failed"]),
+        ("completed", ["completed", "in_progress"]),
+        ("completed", ["searching"]),
+        ("incomplete", ["completed"]),
+    ],
+)
+async def test_search_rejects_unbounded_or_unfinished_call_shapes(
+    setup, response_status, call_statuses
+):
+    g, ledger, c = setup
+    response = c.responses.create.return_value
+    response.status = response_status
+    response.output = [NS(type="web_search_call", status=status) for status in call_statuses]
+    with pytest.raises(Denied, match="approved contract"):
+        await g.complete(1, 3, [{"role": "user", "content": "search"}], search=True)
+    with pytest.raises(Denied):
+        ledger.reserve(1, 3, "chat")
+    assert g.budget.snapshot()["locked"]
 
 
 @pytest.mark.asyncio
@@ -158,7 +201,7 @@ async def test_optional_web_without_tool_use_is_ordinary_chat(setup):
 @pytest.mark.asyncio
 async def test_optional_web_with_tool_use_selects_search(setup):
     g, ledger, c = setup
-    c.responses.create.return_value.output = [NS(type="web_search_call")]
+    c.responses.create.return_value.output = [NS(type="web_search_call", status="completed")]
     assert (
         await g.complete(1, 3, [{"role": "user", "content": "latest news"}], allow_web=True)
         == "answer"
@@ -214,7 +257,7 @@ async def test_optional_web_timeout_keeps_both_holds(setup):
 @pytest.mark.asyncio
 async def test_search_max_documented_context_still_uses_full_hold(setup):
     g, _, c = setup
-    c.responses.create.return_value.output = [NS(type="web_search_call")]
+    c.responses.create.return_value.output = [NS(type="web_search_call", status="completed")]
     c.responses.create.return_value.usage.input_tokens = 136000
     await g.complete(1, 3, [{"role": "user", "content": "search"}], search=True)
     assert g.budget.snapshot()["extras"]["monthly_spent_micros"] == 40000
@@ -223,7 +266,7 @@ async def test_search_max_documented_context_still_uses_full_hold(setup):
 @pytest.mark.asyncio
 async def test_search_contract_overrun_locks_both_ledgers(setup):
     g, ledger, c = setup
-    c.responses.create.return_value.output = [NS(type="web_search_call")]
+    c.responses.create.return_value.output = [NS(type="web_search_call", status="completed")]
     c.responses.create.return_value.usage.input_tokens = 136001
     with pytest.raises(Denied, match="admitted bound"):
         await g.complete(1, 3, [{"role": "user", "content": "search"}], search=True)

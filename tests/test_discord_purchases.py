@@ -297,16 +297,21 @@ async def test_reviewed_chargeback_tombstone_stops_active_entitlement(tmp_path, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "credited"),
-    [(discord.SubscriptionStatus.inactive, 0), (99, 0), (discord.SubscriptionStatus.ending, 1)],
+    ("wire_status", "credited"),
+    [(0, 1), (1, 0), (2, 1), (99, 0)],
 )
 async def test_only_current_active_or_ending_subscriptions_can_fund_grants(
-    tmp_path, monkeypatch, status, credited
+    tmp_path, monkeypatch, wire_status, credited
 ):
     enforce(monkeypatch)
     p = purchases(tmp_path)
     p.import_reviewed_settlement(settlement())
-    assert (await p.reconcile(FakeClient(status=status), credit=True))["credited"] == credited
+    # discord.py 2.7.1 reverses the names for wire values 1 and 2.
+    client = FakeClient()
+    client.sub.status = (
+        discord.SubscriptionStatus(wire_status) if wire_status in (0, 1, 2) else wire_status
+    )
+    assert (await p.reconcile(client, credit=True))["credited"] == credited
 
 
 @pytest.mark.asyncio

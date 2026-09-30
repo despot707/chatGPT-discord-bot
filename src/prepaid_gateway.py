@@ -163,7 +163,16 @@ class Gateway:
             input_tokens = integer(usage.input_tokens)
             output_tokens = integer(usage.output_tokens)
             items = getattr(response, "output", None) or []
-            tool_calls = sum(getattr(i, "type", "") == "web_search_call" for i in items)
+            web_calls = [i for i in items if getattr(i, "type", "") == "web_search_call"]
+            tool_calls = len(web_calls)
+            web_statuses = [getattr(i, "status", None) for i in web_calls]
+            # max_tool_calls limits processed calls. The provider can still
+            # return one later ignored attempt in 'searching' state after a
+            # completed call. Count both possible fees against the $0.04 hold.
+            valid_web_shape = not web_calls or (
+                getattr(response, "status", None) == "completed"
+                and web_statuses in (["completed"], ["completed", "searching"])
+            )
             unknown = any(
                 getattr(i, "type", "") not in {"web_search_call", "reasoning", "message", "refusal"}
                 for i in items
@@ -171,7 +180,7 @@ class Gateway:
             if (
                 output_tokens > cap
                 or unknown
-                or tool_calls > 1
+                or not valid_web_shape
                 or (not (search or optional_web) and tool_calls)
             ):
                 raise Denied("Provider response exceeded the approved contract.")

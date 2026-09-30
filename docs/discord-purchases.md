@@ -14,7 +14,7 @@ PREPAID_DATABASE_PATH=/app/data/prepaid.sqlite3
 HARD_BUDGET_ENABLED=true
 BUDGET_DATABASE_PATH=/app/data/budget.sqlite3
 BUDGET_MONTHLY_USD=10
-BUDGET_LUNA_MONTHLY_USD=7
+BUDGET_LUNA_USD=7
 BUDGET_TIMEZONE=America/Los_Angeles
 ```
 
@@ -28,7 +28,9 @@ Use the actual previously initialized global budget. An opening amount is a one-
 
 The public [Discord storefront](https://discord.com/application-directory/1365724363722068120/store) uses guild subscriptions: one purchase covers the chosen server. Publish each SKU with Store & API visibility and add it in Manage Store. Publishing a SKU and displaying it in a storefront are separate steps.
 
-The adapter accepts only mapped guild-subscription SKUs belonging to this app, application-subscription entitlements, and matching current subscription periods. Null entitlement end dates are normal for ongoing subscriptions. Test entitlements, gifts, unknown types, wrong app/SKU/guild identities, and missing or conflicting period records do not grant access. Startup, relevant gateway events, and a 60-second timer refresh the complete snapshot. Failed reconciliation blocks paid requests once freshness expires.
+The adapter accepts only mapped guild-subscription SKUs belonging to this app, PURCHASE (type 1) or legacy APPLICATION_SUBSCRIPTION (type 8) entitlements, and matching current subscription periods. Null entitlement start/end dates are normal; the authenticated finite subscription period bounds the allowance. Test entitlements, gifts, unknown types, wrong app/SKU/guild identities, and missing or conflicting period records do not grant access. Startup, relevant gateway events, and a 60-second timer refresh the complete snapshot. Failed reconciliation blocks paid requests once freshness expires.
+
+The type-1/null-end fix was integrated from LNCCX's separate purchase-contract work. Offline tests use the actual discord.py Client REST parsers with Discord-shaped JSON, including guild entitlements with null users. These tests verify wire handling but do not claim a real customer checkout. In legacy settlement mode, status checks use documented numeric values 0 (active) and 2 (ending), because discord.py 2.7.1 reverses the names for values 1 and 2. Native access continues to follow authenticated entitlements, not a subscription-status guess.
 
 Each grant key binds app, entitlement, subscription, and period. Replays never refill quota. A renewal grants the new period once. Expiry, deletion, disappearance, or replacement revokes old access; cancellation preserves the remaining authenticated period. A team-owner discount can establish access but records no revenue. Native grants never increase `infrastructure_funding()`.
 

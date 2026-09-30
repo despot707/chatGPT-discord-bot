@@ -259,8 +259,31 @@ class PrepaidClientMixin(_PaidBase):
         from src.prepaid_lifecycle import maintain_storage
 
         while True:
+            retry_delay = 3600
             try:
-                if runtime().storage_ready():
+                ready = runtime().storage_ready()
+            except asyncio.CancelledError:
+                raise
+            except Denied as exc:
+                # Startup purchase reconciliation may not have a complete,
+                # fresh entitlement snapshot yet. This is a readiness wait,
+                # not a storage failure, so retry soon without locking access.
+                logging.getLogger(__name__).debug(
+                    "Prepaid storage maintenance waiting for readiness: %s", exc
+                )
+                ready = False
+                retry_delay = 5
+            except Exception:
+                # No maintenance has run yet. Keep this retryable and fail
+                # closed through storage_ready() rather than locking the ledger.
+                logging.getLogger(__name__).exception(
+                    "Prepaid storage readiness check failed; retrying"
+                )
+                ready = False
+                retry_delay = 5
+
+            if ready:
+                try:
                     paths = {
                         "profiles": os.getenv("PROFILE_DATABASE_PATH", "data/profiles.sqlite3"),
                         "chat": self.config.chat_database_path or "",
@@ -272,14 +295,14 @@ class PrepaidClientMixin(_PaidBase):
                     if result["records_removed"]:
                         self.conversations.clear()
                     logging.getLogger(__name__).info("Prepaid storage maintenance: %s", result)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                runtime().ledger.lock("storage_maintenance_failed")
-                logging.getLogger(__name__).warning(
-                    "Prepaid storage maintenance needs operator review"
-                )
-            await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    runtime().ledger.lock("storage_maintenance_failed")
+                    logging.getLogger(__name__).warning(
+                        "Prepaid storage maintenance needs operator review"
+                    )
+            await asyncio.sleep(retry_delay)
 
     async def close(self):
         purchase_task = self._discord_purchase_task

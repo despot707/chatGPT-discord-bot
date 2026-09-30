@@ -22,6 +22,9 @@ from src.prepaid import PRODUCTS, AccessGrant, Denied, Ledger, Payment, integer
 MAX_ENTITLEMENTS = 10000
 MAX_SUBSCRIPTIONS_PER_USER = 1000
 SNAPSHOT_MAX_AGE_SECONDS = 300
+# Discord's Subscription wire contract is ACTIVE=0, INACTIVE=1, ENDING=2.
+# discord.py 2.7.1 labels values 1 and 2 in reverse; compare wire values.
+SETTLEMENT_SUBSCRIPTION_STATUSES = {0, 2}
 
 
 class PurchaseDenied(Denied):
@@ -428,7 +431,11 @@ class DiscordPurchases:
             if ent.application_id != self.application_id:
                 raise Denied("Discord entitlement belongs to another application.")
             if (
-                ent.type != discord.EntitlementType.application_subscription
+                ent.type
+                not in (
+                    discord.EntitlementType.purchase,
+                    discord.EntitlementType.application_subscription,
+                )
                 or ent.deleted
                 or ent.guild_id is None
             ):
@@ -468,7 +475,7 @@ class DiscordPurchases:
                     or str(raw.get("sku_id")) != str(ent.sku_id)
                     or str(raw.get("guild_id")) != str(ent.guild_id)
                     or raw.get("deleted") is not False
-                    or raw.get("type") != discord.EntitlementType.application_subscription.value
+                    or raw.get("type") != ent.type.value
                 ):
                     raise Denied("Discord entitlement detail conflicts with its list result.")
                 if not raw_id.isdigit() or int(raw_id) <= 0:
@@ -488,8 +495,8 @@ class DiscordPurchases:
             if (
                 (
                     mode == "settlement"
-                    and sub.status
-                    not in (discord.SubscriptionStatus.active, discord.SubscriptionStatus.ending)
+                    and getattr(sub.status, "value", sub.status)
+                    not in SETTLEMENT_SUBSCRIPTION_STATUSES
                 )
                 or (ent.user_id is not None and sub.user_id != ent.user_id)
                 or ent.id not in sub.entitlement_ids
