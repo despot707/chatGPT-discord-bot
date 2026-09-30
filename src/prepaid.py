@@ -8,6 +8,7 @@ payment amount, currency, settlement or renewal. No Discord command grants credi
 from __future__ import annotations
 
 import json
+import random
 import sqlite3
 import time
 import uuid
@@ -26,6 +27,9 @@ class Denied(ValueError):
 # 1024-square medium GPT Image 2 image + at most 2,000 UTF-8 prompt bytes.
 COSTS = {"chat": 1500, "reasoning": 3000, "search": 40000, "images": 80000, "core": 50}
 MIB = 1024**2
+SQLITE_BUSY_TIMEOUT_MS = 250
+SQLITE_BODY_BUSY_TIMEOUT_MS = 10000
+SQLITE_BEGIN_RETRY_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -123,16 +127,45 @@ class Ledger:
 
     @contextmanager
     def db(self):
-        db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=10000")
-        db.execute("PRAGMA synchronous=FULL")
-        # 128 MiB hard ceiling on accounting files; full storage denies new work.
-        db.execute("PRAGMA max_page_count=32768")
+        db = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000, isolation_level=None)
         try:
-            db.execute("BEGIN IMMEDIATE")
+            db.row_factory = sqlite3.Row
+            deadline = time.monotonic() + SQLITE_BEGIN_RETRY_SECONDS
+            delay = 0.005
+
+            def execute_with_retry(statement):
+                nonlocal delay
+                while True:
+                    try:
+                        db.execute(statement)
+                        return
+                    except sqlite3.OperationalError as exc:
+                        code = getattr(exc, "sqlite_errorcode", None)
+                        if code is None or (code & 0xFF) not in (
+                            sqlite3.SQLITE_BUSY,
+                            sqlite3.SQLITE_LOCKED,
+                        ):
+                            raise
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise
+                        time.sleep(min(random.uniform(delay / 2, delay), remaining))
+                        delay = min(delay * 2, 0.1)
+
+            # Retry lock-sensitive setup and transaction boundaries under one
+            # bounded deadline. Only COMMIT is retried after the body has run.
+            db.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+            execute_with_retry("PRAGMA synchronous=FULL")
+            # 128 MiB hard ceiling on accounting files; full storage denies new work.
+            execute_with_retry("PRAGMA max_page_count=32768")
+            execute_with_retry("BEGIN IMMEDIATE")
+            # Preserve the existing tolerance for locks in the transaction body,
+            # including schema initialization via executescript().
+            db.execute(f"PRAGMA busy_timeout={SQLITE_BODY_BUSY_TIMEOUT_MS}")
             yield db
-            db.commit()
+            if db.in_transaction:
+                db.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+                execute_with_retry("COMMIT")
         except BaseException:
             db.rollback()
             raise

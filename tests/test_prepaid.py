@@ -1,7 +1,12 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
+from time import monotonic, sleep
+from types import SimpleNamespace
 
 import pytest
+import src.prepaid as prepaid
 from src.prepaid import COSTS, PRODUCTS, Denied, Ledger, Payment, validate_products
 
 NOW = 1790726400
@@ -91,17 +96,116 @@ def test_isolation_extras_and_expiration(ledger):
 
 def test_parallel_requests_never_overdraw(ledger):
     ledger.credit(payment())
+    # Separate Ledger instances model concurrent callers that do not share
+    # Python state; SQLite must still serialize reservations against the file.
+    clients = [Ledger(ledger.path, clock=lambda: NOW) for _ in range(16)]
 
     def attempt(i):
         try:
-            return ledger.reserve(1, 2, "chat")
+            return clients[i % len(clients)].reserve(1, 2, "chat")
         except Denied:
             return None
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=16) as pool:
         result = list(pool.map(attempt, range(150)))
     assert sum(r is not None for r in result) == PRODUCTS["basic"].allowances["chat"]
     assert ledger.summary(1)["remaining"]["chat"] == 0
+
+
+def test_database_setup_retries_while_exclusive_writer_holds_lock(ledger):
+    ledger.credit(payment())
+    blocker = sqlite3.connect(ledger.path, isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    started = Event()
+
+    def reserve():
+        started.set()
+        return ledger.reserve(1, 2, "chat")
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(reserve)
+            assert started.wait(timeout=2)
+            sleep(0.4)
+            assert not result.done()
+            blocker.execute("COMMIT")
+            assert result.result(timeout=5)
+    finally:
+        blocker.close()
+
+
+def test_database_setup_contention_retry_is_bounded(ledger, monkeypatch):
+    ledger.credit(payment())
+    blocker = sqlite3.connect(ledger.path, isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    monkeypatch.setattr(prepaid, "SQLITE_BEGIN_RETRY_SECONDS", 0.05)
+    started = monotonic()
+
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            ledger.reserve(1, 2, "chat")
+        assert monotonic() - started < 1.5
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+    assert ledger.summary(1)["remaining"]["chat"] == PRODUCTS["basic"].allowances["chat"]
+
+
+def test_commit_retries_until_reader_releases_shared_lock(ledger):
+    ledger.credit(payment())
+    reader = sqlite3.connect(ledger.path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM prepaid_grants").fetchall()
+    started = Event()
+
+    def reserve():
+        started.set()
+        return ledger.reserve(1, 2, "chat")
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(reserve)
+            assert started.wait(timeout=2)
+            sleep(0.4)
+            assert not result.done()
+            reader.execute("ROLLBACK")
+            assert result.result(timeout=5)
+    finally:
+        reader.close()
+
+
+def test_database_setup_error_closes_connection(ledger, monkeypatch):
+    class BrokenConnection:
+        closed = False
+        rolled_back = False
+
+        def execute(self, statement):
+            if statement == "PRAGMA synchronous=FULL":
+                raise sqlite3.OperationalError("synthetic setup failure")
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            self.closed = True
+
+    connection = BrokenConnection()
+    fake_sqlite = SimpleNamespace(
+        connect=lambda *args, **kwargs: connection,
+        Row=sqlite3.Row,
+        OperationalError=sqlite3.OperationalError,
+        SQLITE_BUSY=sqlite3.SQLITE_BUSY,
+        SQLITE_LOCKED=sqlite3.SQLITE_LOCKED,
+    )
+    monkeypatch.setattr(prepaid, "sqlite3", fake_sqlite)
+
+    with pytest.raises(sqlite3.OperationalError, match="synthetic setup failure"):
+        with ledger.db():
+            pass
+
+    assert connection.rolled_back
+    assert connection.closed
 
 
 def test_cancel_only_before_dispatch_and_timeout_holds_survive(ledger):
