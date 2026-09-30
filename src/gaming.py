@@ -10,6 +10,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from src.prepaid_runtime import finish_table, limit_database, reserve_table, storage_transaction
+
 
 class GamingError(RuntimeError):
     """A safe, user-presentable gaming storage or input error."""
@@ -87,6 +89,7 @@ class GamingStore:
                 connection = sqlite3.connect(database_path, timeout=5.0, check_same_thread=False)
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("PRAGMA journal_mode = WAL")
+                limit_database(connection)
                 connection.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS steam_links (
@@ -108,6 +111,7 @@ class GamingStore:
         return self._connection
 
     @_serialized
+    @storage_transaction
     def link_steam(self, guild_id: int, user_id: int, steam_id: str, display_name: str) -> None:
         _validate_id(guild_id, "Guild ID")
         _validate_id(user_id, "User ID")
@@ -126,13 +130,16 @@ class GamingStore:
                 "steam_id=excluded.steam_id, display_name=excluded.display_name",
                 (guild_id, user_id, steam_id.strip(), display_name.strip()),
             )
+            ticket = reserve_table(self._db(), guild_id, "gaming")
             self._db().commit()
+            finish_table(ticket)
         except sqlite3.Error as exc:
             if self._connection is not None:
                 self._connection.rollback()
             raise GamingError("Could not save Steam link.") from exc
 
     @_serialized
+    @storage_transaction
     def unlink_steam(self, guild_id: int, user_id: int) -> bool:
         _validate_id(guild_id, "Guild ID")
         _validate_id(user_id, "User ID")
@@ -140,7 +147,9 @@ class GamingStore:
             cursor = self._db().execute(
                 "DELETE FROM steam_links WHERE guild_id=? AND user_id=?", (guild_id, user_id)
             )
+            ticket = reserve_table(self._db(), guild_id, "gaming")
             self._db().commit()
+            finish_table(ticket)
             return cursor.rowcount > 0
         except sqlite3.Error as exc:
             if self._connection is not None:
@@ -165,6 +174,7 @@ class GamingStore:
             raise GamingError("Could not read Steam link.") from exc
 
     @_serialized
+    @storage_transaction
     def join_party(self, guild_id: int, channel_id: int, player: PartyPlayer) -> None:
         _validate_id(guild_id, "Guild ID")
         _validate_id(channel_id, "Channel ID")
@@ -196,7 +206,9 @@ class GamingStore:
                     player.role.strip(),
                 ),
             )
+            ticket = reserve_table(db, guild_id, "gaming")
             db.commit()
+            finish_table(ticket)
         except GamingError:
             raise
         except sqlite3.Error as exc:
@@ -204,6 +216,7 @@ class GamingStore:
             raise GamingError("Could not update party.") from exc
 
     @_serialized
+    @storage_transaction
     def leave_party(self, guild_id: int, channel_id: int, user_id: int) -> bool:
         _validate_id(guild_id, "Guild ID")
         _validate_id(channel_id, "Channel ID")
@@ -213,7 +226,9 @@ class GamingStore:
                 "DELETE FROM party_players WHERE guild_id=? AND channel_id=? AND user_id=?",
                 (guild_id, channel_id, user_id),
             )
+            ticket = reserve_table(self._db(), guild_id, "gaming")
             self._db().commit()
+            finish_table(ticket)
             return cursor.rowcount > 0
         except sqlite3.Error as exc:
             if self._connection is not None:
@@ -239,6 +254,7 @@ class GamingStore:
             raise GamingError("Could not read party.") from exc
 
     @_serialized
+    @storage_transaction
     def clear_party(self, guild_id: int, channel_id: int) -> None:
         _validate_id(guild_id, "Guild ID")
         _validate_id(channel_id, "Channel ID")
@@ -247,7 +263,9 @@ class GamingStore:
                 "DELETE FROM party_players WHERE guild_id=? AND channel_id=?",
                 (guild_id, channel_id),
             )
+            ticket = reserve_table(self._db(), guild_id, "gaming")
             self._db().commit()
+            finish_table(ticket)
         except sqlite3.Error as exc:
             if self._connection is not None:
                 self._connection.rollback()

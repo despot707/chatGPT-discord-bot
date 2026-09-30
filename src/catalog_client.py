@@ -106,6 +106,10 @@ class CatalogClientMixin(_CatalogBase):
             return
 
         async def game_autocomplete(interaction: discord.Interaction, current: str):
+            from src.prepaid_runtime import free_interaction_allowed
+
+            if not free_interaction_allowed(interaction.user.id, getattr(interaction, "id", None)):
+                return []
             scope = (interaction.guild_id or 0, interaction.channel_id or 0, interaction.user.id)
             if not interaction.guild_id or not self.allowed(scope):
                 return []
