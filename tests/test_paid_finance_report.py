@@ -127,6 +127,9 @@ async def test_projected_shortfall_warns_without_logging_finance_source(
     )
     monkeypatch.setenv("PAID_HOSTING_LIABILITY_USD", "1")
     rt._last_planning_log = float("-inf")
+    # Startup reports unknown financial evidence separately; inspect the new
+    # reviewed shortfall report emitted by this action, not fixture setup.
+    caplog.clear()
     with caplog.at_level(logging.WARNING):
         rt._log_planning_report()
     assert len(caplog.records) == 1
