@@ -1,0 +1,16 @@
+{
+  "approved": false,
+  "reviewed_at": 0,
+  "receipts_verified": false,
+  "provider_contracts_verified": false,
+  "image_contract_verified": false,
+  "storage_lifecycle_verified": false,
+  "workload_isolated": false,
+  "reconciliation_current": false,
+  "native_compute_cap_micros": 0,
+  "native_agent_cap_micros": 0,
+  "native_openai_cap_micros": 0,
+  "hosting_liability_micros": 0,
+  "operator_funding_micros": 0,
+  "_instructions": "Operator evidence template only. Do not set true merely to unlock. No paid checkout, tax/KYC consent, native limits, or receipt verification is performed by this file. Re-review every 7 days; microdollars: $1=1000000. Host allowance must cover 110% of compute+Agent cap or documented liability, whichever is higher."
+}

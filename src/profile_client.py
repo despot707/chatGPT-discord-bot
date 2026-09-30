@@ -14,6 +14,7 @@ from discord import app_commands
 from src.aclient import PUBLIC_FAILURE, BotRequestError
 from src.ai_access import ai_disabled
 from src.member_settings import ProfileStore, validate_change, visible_profile
+from src.prepaid import Denied
 from src.profile_privacy import erase_legacy_records
 from src.profile_ui import ProfilePanel, private_notice
 
@@ -188,6 +189,8 @@ class ProfileClientMixin(_ProfileBase):
                 wait=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+        except Denied as exc:
+            await private_notice(interaction, str(exc))
         except (ValueError, json.JSONDecodeError):
             await private_notice(
                 interaction,

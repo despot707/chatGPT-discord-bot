@@ -25,6 +25,7 @@ from src.chat_store import ChatStore
 from src.config import BotConfig
 from src.memory_store import MemoryStore
 from src.message_context import serialize_message
+from src.prepaid import Denied
 from src.providers import ImageInput, ProviderError, ProviderManager, ProviderType
 from src.request_intent import parse_request_intent
 from src.web import WebError, WebService, WebSource
@@ -45,6 +46,8 @@ _BUDGET_ERROR_TERMS = (
 
 def public_error_message(error: BaseException) -> str:
     """Render a normal request failure without exposing provider or budget details."""
+    if isinstance(error, Denied):
+        return str(error)
     if isinstance(error, (ProviderError, BudgetError)):
         return PUBLIC_FAILURE
     message = str(error)

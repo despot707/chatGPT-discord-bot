@@ -7,6 +7,8 @@ import time
 from contextlib import closing
 from pathlib import Path
 
+from src.prepaid_runtime import finish_table, limit_database, reserve_table, storage_transaction
+
 
 class ChatStore:
     """Persist bounded text turns, with separate keys for shared and private chats."""
@@ -40,6 +42,7 @@ class ChatStore:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=5.0)
         db.execute("PRAGMA busy_timeout = 5000")
+        limit_database(db)
         return db
 
     def _expire(self, db: sqlite3.Connection, now: float) -> None:
@@ -74,6 +77,7 @@ class ChatStore:
             size += pair_size
         return kept
 
+    @storage_transaction
     def append_turn(
         self,
         key: tuple[int, int, int],
@@ -138,14 +142,19 @@ class ChatStore:
                     "DELETE FROM chat_turns WHERE guild_id=? AND channel_id=? AND user_id=?",
                     old_scope,
                 )
+            ticket = reserve_table(db, key[0], "chat")
             db.commit()
+            finish_table(ticket)
 
+    @storage_transaction
     def clear(self, key: tuple[int, int, int]) -> None:
         with closing(self._connect()) as db, db:
             db.execute(
                 "DELETE FROM chat_turns WHERE guild_id=? AND channel_id=? AND user_id=?", key
             )
+            ticket = reserve_table(db, key[0], "chat")
             db.commit()
+            finish_table(ticket)
 
     def prune(self) -> None:
         with closing(self._connect()) as db, db:

@@ -273,6 +273,11 @@ class ProfilePanel(ui.LayoutView):
         return "This server" if item.get("visibility") == "server" else "Only me"
 
     async def authorized(self, interaction, *, modal=False):
+        from src.prepaid_runtime import free_interaction_allowed
+
+        if not free_interaction_allowed(interaction.user.id, getattr(interaction, "id", None)):
+            await private_notice(interaction, "Please wait a moment before using another control.")
+            return False
         if interaction.user.id != self.owner_id or interaction.guild_id != self.guild_id:
             await private_notice(
                 interaction,

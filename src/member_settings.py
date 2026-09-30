@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from src.prepaid_runtime import finish_table, limit_database, reserve_table, storage_transaction
+
 
 class StaleProfile(ValueError):
     """A newer save or deletion has invalidated this form."""
@@ -151,6 +153,7 @@ class ProfileStore:
         db = sqlite3.connect(self.path, timeout=5)
         db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA secure_delete=ON")
+        limit_database(db)
         return db
 
     @staticmethod
@@ -171,9 +174,14 @@ class ProfileStore:
         with closing(self._connect()) as db:
             return self._read(db, guild_id, user_id)
 
+    @storage_transaction
     def apply(self, guild_id, user_id, operation, data, expected_revision):
         self._ids(guild_id, user_id)
         data = validate_change(operation, data)
+        from src.prepaid_runtime import enforcing, runtime
+
+        if enforcing() and operation in {"game", "birthday", "preferences"}:
+            runtime().core(guild_id, user_id)
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             current = self._read(db, guild_id, user_id)
@@ -215,6 +223,8 @@ class ProfileStore:
                 payload=excluded.payload,updated_at=excluded.updated_at""",
                 (guild_id, user_id, revision, json.dumps(payload, ensure_ascii=False), time.time()),
             )
+            ticket = reserve_table(db, guild_id, "profiles")
+        finish_table(ticket)
         return current
 
     def shared(self, guild_id, *, birthday_only=False, limit=25):
