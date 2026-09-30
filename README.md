@@ -1,6 +1,8 @@
-# ChatGPT Discord Bot
+# Sidecord Ai
 
 A self-hosted Discord assistant you can mention during a conversation. It supports saved channel chat, image input, web lookups, and selectable AI providers. Run it on your PC or as one Railway worker. “ChatGPT” describes the Discord experience; ChatGPT subscriptions do not include API credits for this bot.
+
+Public website: [Sidecord Ai](https://sidecord-ai.com/), including [Privacy](https://sidecord-ai.com/privacy/), [Terms](https://sidecord-ai.com/terms/), and [Support](https://sidecord-ai.com/support/). The deployed site and its public routes have been verified; paid plans remain a preview and sales are off. See the [commercial launch handoff](docs/commercial-launch.md) for remaining account and payment gates, and [site/README.md](site/README.md) to rebuild the site.
 
 ## Everyday chat
 

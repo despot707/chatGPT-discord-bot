@@ -21,4 +21,7 @@ pyproject.toml
 pytest.ini
 auto_login
 hardir
+site
+.wrangler
+.playwright-mcp
 src/art.py

@@ -1,0 +1,16 @@
+{
+  "brand": {
+    "name": "Sidecord Ai",
+    "shortName": "Sidecord Ai",
+    "tagline": "Good company. Better conversations.",
+    "description": "AI-powered conversations and game-night help for your Discord server. Ask questions, discuss screenshots and polls, compare shared Steam libraries, and build teams. Member-controlled profiles keep preferences private by default."
+  },
+  "baseUrl": "https://sidecord-ai.com",
+  "inviteUrl": "",
+  "supportUrl": "https://github.com/despot707/chatGPT-discord-bot/issues",
+  "sourceUrl": "https://github.com/despot707/chatGPT-discord-bot",
+  "saleStatus": "coming_soon",
+  "pricing": {
+    "source": "docs/prepaid-plans.md"
+  }
+}
