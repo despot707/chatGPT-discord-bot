@@ -42,6 +42,15 @@ def test_unreviewed_launch_is_locked(tmp_path):
         rt.ready()
 
 
+def test_launch_pause_prevents_paid_sdk_initialization(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_ACCESS_MODE", "disabled")
+    rt, _ = make(tmp_path, manifest())
+    monkeypatch.setattr(rt, "ready", lambda: pytest.fail("Paid readiness should not run"))
+    with pytest.raises(Denied, match="I can't do that right now"):
+        rt.model_gateway()
+    assert rt.gateway is None
+
+
 def test_local_core_is_free_but_rate_limited(tmp_path):
     rt, ledger = make(tmp_path, manifest())
     rt.core(1, 2)

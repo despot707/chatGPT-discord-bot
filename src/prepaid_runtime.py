@@ -16,6 +16,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Callable
 
+from src.ai_access import ai_disabled, parse_ai_access_mode
 from src.prepaid import FREE_STORAGE_BYTES, Denied, Ledger, integer
 from src.prepaid_gateway import Gateway
 
@@ -128,6 +129,8 @@ class Runtime:
         self._recent[key] = now + 1
 
     def model_gateway(self) -> Gateway:
+        if ai_disabled(parse_ai_access_mode(os.environ), "paid gateway initialization"):
+            raise Denied("I can't do that right now.")
         self.ready()
         if self.gateway is None:
             from openai import AsyncOpenAI

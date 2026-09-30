@@ -1,11 +1,35 @@
 from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from src.prepaid import Denied, Ledger
 from src.prepaid_gateway import Gateway
 
 from tests.test_prepaid import NOW, payment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["chat", "reasoning", "search", "image"])
+async def test_launch_pause_blocks_even_funded_gateway_before_network(monkeypatch, operation):
+    monkeypatch.setenv("AI_ACCESS_MODE", "disabled")
+    ready = Mock()
+    ledger = Mock()
+    client = Mock()
+    gateway = Gateway(ledger, client, ready=ready)
+    with pytest.raises(Denied, match="I can't do that right now"):
+        if operation == "image":
+            await gateway.image(1, 2, "a cat")
+        else:
+            await gateway.complete(
+                1,
+                2,
+                [{"role": "user", "content": "hello"}],
+                reasoning=operation == "reasoning",
+                search=operation == "search",
+            )
+    ready.assert_not_called()
+    assert not ledger.mock_calls
+    assert not client.mock_calls
 
 
 @pytest.fixture

@@ -76,6 +76,8 @@ The import utility records a SHA-256 hash and reference for externally inspected
 
 ## Launch gate and what remains outside this code
 
+`AI_ACCESS_MODE=disabled` is a separate launch pause that blocks all provider initialization and AI dispatch, including the commercial gateway. It does not grant a subscription or enable checkout. Production uses this setting while free profiles and code-only gaming remain available. Paid activation requires explicitly lifting this pause together with enforce mode and all reviewed purchase gates.
+
 `PREPAID_MODE=off` preserves the existing personal bot. `preview` also preserves existing paid API behavior and only shows draft plans; IT IS NOT SPENDING PROTECTION. `enforce` enables the commercial checks. Missing, unapproved or older-than-seven-days operator evidence blocks paid activity. Native account limits are NOT set or proven by an evidence JSON file.
 
 Before enforce mode, complete Discord verification/monetization approvals, configure real reviewed guild-subscription SKUs, and prepare the independent invoice evidence process described above. Discord entitlements establish access and period identity; they do not establish invoice amounts, immutable invoice status, refunds, or net revenue. There is no automatic financial export importer or live checkout in this release. `Ledger.credit(Payment)` is an internal accounting boundary, not payment authentication.

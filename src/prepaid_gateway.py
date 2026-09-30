@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from typing import Any, Callable
 
+from src.ai_access import ai_disabled, parse_ai_access_mode
 from src.prepaid import COSTS, Denied, Ledger, integer
 
 
@@ -18,6 +20,8 @@ class Gateway:
     async def complete(
         self, guild: int, user: int, messages: list, *, reasoning=False, search=False, images=()
     ) -> str:
+        if ai_disabled(parse_ai_access_mode(os.environ), "paid completion"):
+            raise Denied("I can't do that right now.")
         self.ready()
         if type(reasoning) is not bool or type(search) is not bool or (reasoning and search):
             raise Denied("Choose either a web lookup or a reasoning request.")
@@ -124,6 +128,8 @@ class Gateway:
         return _web_citation_text(response, text) if search else text
 
     async def image(self, guild: int, user: int, prompt: str) -> bytes:
+        if ai_disabled(parse_ai_access_mode(os.environ), "paid image"):
+            raise Denied("I can't do that right now.")
         self.ready()
         # Deliberately one priced contract, not whatever model/quality the user
         # can select in legacy provider menus. Requires launch availability check.
