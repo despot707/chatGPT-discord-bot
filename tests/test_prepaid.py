@@ -53,6 +53,56 @@ def test_no_payment_no_service(ledger):
         ledger.reserve(1, 2, "chat")
 
 
+def test_paired_dispatch_and_verified_search_choice_are_atomic(ledger):
+    ledger.credit(payment(product="plus"))
+    chat = ledger.reserve(1, 2, "chat")
+    search = ledger.reserve(1, 2, "search")
+    ledger.dispatch_many([chat, search])
+    ledger.settle_choice(chat, search, 20_000, used_search=True)
+    ledger.settle_choice(chat, search, 20_000, used_search=True)
+    with ledger.db() as db:
+        rows = db.execute(
+            "SELECT id,state,actual FROM prepaid_requests WHERE id IN (?,?)", (chat, search)
+        ).fetchall()
+    by_id = {row["id"]: (row["state"], row["actual"]) for row in rows}
+    assert by_id == {chat: ("cancelled", 0), search: ("settled", 20_000)}
+    with pytest.raises(Denied, match="inconsistent"):
+        ledger.settle_choice(chat, search, 100, used_search=False)
+    with ledger.db() as db:
+        assert db.execute("SELECT value FROM prepaid_state WHERE key='locked'").fetchone()[0]
+
+
+def test_paired_dispatch_failure_leaves_other_reservation_unspent(ledger):
+    ledger.credit(payment(product="plus"))
+    chat = ledger.reserve(1, 2, "chat")
+    search = ledger.reserve(1, 2, "search")
+    ledger.cancel(search)
+    with pytest.raises(Denied, match="no longer valid"):
+        ledger.dispatch_many([chat, search])
+    with ledger.db() as db:
+        assert (
+            db.execute("SELECT state FROM prepaid_requests WHERE id=?", (chat,)).fetchone()[0]
+            == "reserved"
+        )
+    ledger.cancel(chat)
+
+
+def test_paired_choice_rejects_provider_overrun_and_retains_holds(ledger):
+    ledger.credit(payment(product="plus"))
+    chat = ledger.reserve(1, 2, "chat")
+    search = ledger.reserve(1, 2, "search")
+    ledger.dispatch_many([chat, search])
+    with pytest.raises(Denied, match="inconsistent"):
+        ledger.settle_choice(chat, search, COSTS["chat"] + 1, used_search=False)
+    with ledger.db() as db:
+        rows = db.execute(
+            "SELECT state FROM prepaid_requests WHERE id IN (?,?)", (chat, search)
+        ).fetchall()
+        locked = db.execute("SELECT value FROM prepaid_state WHERE key='locked'").fetchone()
+    assert [row["state"] for row in rows] == ["dispatched", "dispatched"]
+    assert locked is not None
+
+
 def test_receipt_replay_cannot_multiply_or_move_credit(ledger):
     assert ledger.credit(payment()) is True
     assert ledger.credit(payment()) is False

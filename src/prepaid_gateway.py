@@ -8,25 +8,40 @@ import os
 from typing import Any, Callable
 
 from src.ai_access import ai_disabled, parse_ai_access_mode
+from src.budget import BudgetExceeded, BudgetLedger
 from src.prepaid import COSTS, Denied, Ledger, integer
 
 
 class Gateway:
-    def __init__(self, ledger: Ledger, client, *, ready: Callable[[], None]):
+    def __init__(self, ledger: Ledger, client, *, ready: Callable[[], None], budget: BudgetLedger):
         self.ledger = ledger
         self.client = client
         self.ready = ready
+        self.budget = budget
 
     async def complete(
-        self, guild: int, user: int, messages: list, *, reasoning=False, search=False, images=()
+        self,
+        guild: int,
+        user: int,
+        messages: list,
+        *,
+        reasoning=False,
+        search=False,
+        allow_web=False,
+        images=(),
     ) -> str:
         if ai_disabled(parse_ai_access_mode(os.environ), "paid completion"):
             raise Denied("I can't do that right now.")
         self.ready()
-        if type(reasoning) is not bool or type(search) is not bool or (reasoning and search):
+        if (
+            type(reasoning) is not bool
+            or type(search) is not bool
+            or type(allow_web) is not bool
+            or (reasoning and search)
+        ):
             raise Denied("Choose either a web lookup or a reasoning request.")
         feature = "search" if search else "reasoning" if reasoning else "chat"
-        model = "gpt-4.1-mini" if search else "gpt-6-luna"
+        model = "gpt-6-luna"
         cap = 2000 if reasoning else 500
         if len(messages) > 45 or len(json.dumps(messages).encode()) > 150000 or len(images) > 1:
             raise Denied("This request exceeds the bounded conversation size.")
@@ -56,14 +71,62 @@ class Gateway:
                 },
             ]
         request: dict[str, Any] = {"model": model, "input": request_messages}
-        if not search:
-            request["reasoning"] = {"effort": "low" if reasoning else "none"}
-        if search:
-            request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
-            request["tool_choice"] = "required"
-        # Reserve BEFORE even the unbilled token-counting network request.
+        request["reasoning"] = {"effort": "low" if reasoning else "none"}
+        # A normal chat may search when the model needs live information. Hold
+        # both possible outcomes before dispatch; verified usage selects one
+        # allowance and releases the other. If search has no available quota,
+        # continue as a chat that must disclose its lack of live web access.
+        optional_web = allow_web and feature == "chat"
         rid = self.ledger.reserve(guild, user, feature)
+        search_rid = None
+        budget_holds = {}
         try:
+            if optional_web:
+                try:
+                    search_rid = self.ledger.reserve(guild, user, "search")
+                except Denied:
+                    optional_web = False
+            if optional_web:
+                try:
+                    holds = self.budget.reserve_many(
+                        {"luna": COSTS["chat"], "extras": COSTS["search"]}
+                    )
+                    budget_holds = {hold.bucket: hold for hold in holds}
+                except BudgetExceeded:
+                    assert search_rid is not None
+                    self.ledger.cancel(search_rid)
+                    search_rid = None
+                    optional_web = False
+            if not budget_holds:
+                bucket = "luna" if feature == "chat" else "extras"
+                budget_holds[bucket] = self.budget.reserve(bucket, COSTS[feature])
+            if search or optional_web:
+                request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
+                request["tool_choice"] = "required" if search else "auto"
+                if optional_web:
+                    request_messages.insert(
+                        0,
+                        {
+                            "role": "developer",
+                            "content": (
+                                "Use web_search when answering needs current or "
+                                "externally verifiable information. Otherwise "
+                                "answer without a web call. Never claim a lookup "
+                                "unless the tool actually runs."
+                            ),
+                        },
+                    )
+            elif allow_web and feature == "chat":
+                request_messages.insert(
+                    0,
+                    {
+                        "role": "developer",
+                        "content": (
+                            "Live web access is unavailable for this request. "
+                            "Do not claim you searched or verified current information."
+                        ),
+                    },
+                )
             counted = await self.client.responses.input_tokens.count(**request, timeout=10)
             count = integer(getattr(counted, "input_tokens", None))
             if count > 8000:
@@ -78,9 +141,16 @@ class Gateway:
                 max_tool_calls=1,
                 parallel_tool_calls=False,
             )
-            self.ledger.dispatch(rid)
+            if optional_web:
+                assert search_rid is not None
+                self.ledger.dispatch_many([rid, search_rid])
+            else:
+                self.ledger.dispatch(rid)
         except BaseException:
             self.ledger.cancel(rid)
+            if search_rid is not None:
+                self.ledger.cancel(search_rid)
+            self.budget.cancel_before_dispatch([hold.id for hold in budget_holds.values()])
             raise
         # Timeout/cancellation/connection failure can be billable. Leave the
         # dispatched maximum charged and never retry automatically.
@@ -98,26 +168,55 @@ class Gateway:
                 getattr(i, "type", "") not in {"web_search_call", "reasoning", "message", "refusal"}
                 for i in items
             )
-            if output_tokens > cap or unknown or tool_calls > 1 or (not search and tool_calls):
+            if (
+                output_tokens > cap
+                or unknown
+                or tool_calls > 1
+                or (not (search or optional_web) and tool_calls)
+            ):
                 raise Denied("Provider response exceeded the approved contract.")
-            if not search and input_tokens > 8000:
+            # Responses web search is documented to have a 128k search-context
+            # window, separate from the admitted 8k prompt. Allow headroom for
+            # wrapping, but reject usage outside the prepaid $0.04 envelope.
+            if input_tokens > (136000 if tool_calls else 8000):
                 raise Denied("Provider input exceeded its admitted bound.")
-            # Cached discounts never increase available quota. Search input uses
-            # the documented 8k block; add it conservatively even if usage already
-            # includes it. Final usage exceeding the hold freezes the service.
-            cost = (
-                (input_tokens * 2 + output_tokens * 8 + 4) // 5
-                if search
-                else (input_tokens + output_tokens * 4 + 7) // 8
-            )
-            if search:
-                cost += tool_calls * (10000 + 3200)
-            if cost > COSTS[feature]:
+            # Count all input at Luna's cache-write price ($0.125/M), which is
+            # higher than standard input and independent of cache discounts.
+            # One built-in web call adds $0.01; the 128k search context means
+            # long-context pricing (>272k) is outside this approved contract.
+            cost = (input_tokens + 7) // 8 + (output_tokens + 1) // 2
+            if tool_calls:
+                cost += tool_calls * 10000
+            selected_feature = "search" if tool_calls and optional_web else feature
+            if cost > COSTS[selected_feature]:
                 raise Denied("Provider cost exceeded its reserved maximum.")
-            self.ledger.settle(rid, cost)
+            # The API docs do not explicitly reconcile hosted web-content
+            # tokens to response.usage. Charge the full search hold after a
+            # verified call so the shared cash ledger never understates spend.
+            if tool_calls:
+                cost = COSTS["search"]
+            if optional_web:
+                assert search_rid is not None
+                self.ledger.settle_choice(rid, search_rid, cost, used_search=bool(tool_calls))
+                selected_bucket = "extras" if tool_calls else "luna"
+                other_bucket = "luna" if tool_calls else "extras"
+                self.budget.settle(budget_holds[selected_bucket].id, cost)
+                self.budget.settle(budget_holds[other_bucket].id, 0)
+            else:
+                self.ledger.settle(rid, cost)
+                self.budget.settle(next(iter(budget_holds.values())).id, cost)
+        except Denied:
+            self.ledger.lock("paid_response_contract")
+            self.budget.lock("paid_response_contract")
+            raise
         except (AttributeError, TypeError, ValueError):
             self.ledger.lock()
+            self.budget.lock("paid_usage_contract")
             raise Denied("Usage could not be verified; paid features are paused.") from None
+        if search and not tool_calls:
+            raise Denied(
+                "The web lookup did not run. This attempt may have consumed its allowance."
+            )
         text = getattr(response, "output_text", "")
         if not text:
             raise Denied(
@@ -125,7 +224,7 @@ class Gateway:
             )
         from src.providers import _web_citation_text
 
-        return _web_citation_text(response, text) if search else text
+        return _web_citation_text(response, text) if tool_calls else text
 
     async def image(self, guild: int, user: int, prompt: str) -> bytes:
         if ai_disabled(parse_ai_access_mode(os.environ), "paid image"):
@@ -136,9 +235,17 @@ class Gateway:
         if not isinstance(prompt, str) or not 1 <= len(prompt.encode()) <= 2000:
             raise Denied("Use an image prompt of 1 to 2,000 UTF-8 bytes.")
         rid = self.ledger.reserve(guild, user, "images")
-        self.ledger.dispatch(rid)
+        budget_hold = None
+        try:
+            budget_hold = self.budget.reserve("extras", COSTS["images"])
+            self.ledger.dispatch(rid)
+        except BaseException:
+            self.ledger.cancel(rid)
+            if budget_hold is not None:
+                self.budget.cancel_before_dispatch([budget_hold.id])
+            raise
         response = await self.client.images.generate(
-            model="gpt-image-2-2026-04-21",
+            model="gpt-image-2.5-flare-2026-09-08",
             prompt=prompt,
             n=1,
             size="1024x1024",
@@ -146,23 +253,30 @@ class Gateway:
             output_format="jpeg",
             timeout=60,
         )
-        # Image 2 publishes about $0.053 for medium square output + $2.50/M
-        # text input. Reserve $0.08 above a 2,000-byte prompt and fixed image.
+        # Flare 2.5 charges $5/M text input and $30/M output tokens. Its
+        # 1024-square medium generation is 439 output tokens in the official
+        # calculator; the $0.08 reservation leaves headroom for prompt tokens.
         # Require complete usage; unknown means freeze, not assume a free call.
         try:
             usage = response.usage
             it = integer(usage.input_tokens)
             ot = integer(usage.output_tokens)
-            cost = (it * 5 + 1) // 2 + ot * 15
+            cost = it * 5 + ot * 30
             if it > 2500 or cost > COSTS["images"]:
                 raise Denied("Image cost contract exceeded.")
             self.ledger.settle(rid, cost)
+            self.budget.settle(budget_hold.id, cost)
             data = response.data
             if len(data) != 1 or not data[0].b64_json:
                 raise Denied("Expected one inline image.")
             if len(data[0].b64_json) > 12_000_000:
                 raise Denied("Image exceeds bounded delivery size.")
             return base64.b64decode(data[0].b64_json, validate=True)
+        except Denied:
+            self.ledger.lock("paid_image_contract")
+            self.budget.lock("paid_image_contract")
+            raise
         except (AttributeError, TypeError, ValueError):
             self.ledger.lock()
+            self.budget.lock("paid_image_contract")
             raise Denied("Image usage could not be verified; paid features are paused.") from None

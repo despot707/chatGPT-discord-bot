@@ -36,6 +36,7 @@ FREE_COMMANDS = {
     "private",
     "budget",
 }
+SIDECORD_APPLICATION_ID = 1365724363722068120
 NETWORK_COMMANDS = {"chat", "search", "browse", "draw", "remember"}
 CORE_COMMANDS = {
     "addgame",
@@ -51,27 +52,62 @@ CORE_COMMANDS = {
 }
 
 
-def product_text(product) -> str:
-    names = {
-        "chat": "chat attempts",
-        "reasoning": "reasoning attempts",
-        "search": "web searches",
-        "images": "image attempts",
-    }
-    rows = [f"{n:,} {names[k]}" for k, n in product.allowances.items() if k != "core"]
-    if product.storage_bytes:
-        rows.append(f"{product.storage_bytes // (1024**2):,} MiB saved data")
-    return " · ".join(rows)
+PLAN_SKUS = {
+    "basic": 1554920142532513832,
+    "plus": 1554920641088593990,
+    "premium": 1554920977488551936,
+}
 
 
-def plan_embed() -> discord.Embed:
+def active_plan_skus(config) -> dict[int, str] | None:
+    """Return trusted native checkout SKUs only when paid enforcement is live."""
+    if (
+        not enforcing()
+        or config.ai_access_mode == "disabled"
+        or not config.hard_budget_enabled
+        or config.discord_purchase_mode != "enforce"
+        or os.getenv("DISCORD_PURCHASE_MODE", "off").strip().lower() != "enforce"
+        or os.getenv("DISCORD_FUNDING_MODE", "settlement").strip().lower() != "entitlement"
+        or config.discord_application_id != SIDECORD_APPLICATION_ID
+    ):
+        return None
+    configured = sku_map(config.discord_sku_map)
+    expected = {sku_id: product for product, sku_id in PLAN_SKUS.items()}
+    if configured != expected:
+        return None
+    return expected
+
+
+def plan_view(skus: dict[int, str] | None) -> discord.ui.View | None:
+    if not skus:
+        return None
+    view = discord.ui.View(timeout=None)
+    for product, sku_id in PLAN_SKUS.items():
+        if skus.get(sku_id) != product:
+            return None
+        view.add_item(
+            discord.ui.Button(
+                style=discord.ButtonStyle.premium,
+                sku_id=sku_id,
+            )
+        )
+    return view
+
+
+def plan_embed(*, checkout_available: bool = False) -> discord.Embed:
     e = discord.Embed(
         title="Free tools & AI plans",
-        description="**Preparation preview. Purchases are not enabled.**\nAI allowances are shared by each server. No automatic overages.",
+        description=(
+            "**Monthly Discord guild subscriptions.** AI allowances are shared by the whole server. "
+            "No rollover or overage charges. Cancel through Discord; access continues until the "
+            "current paid period ends."
+            if checkout_available
+            else "**Plan preview. Purchases are not enabled here.**\nAI allowances are designed to be shared by each server."
+        ),
     )
     e.add_field(
         name="Free for every server",
-        value="Profiles and code-based game/team tools, with 1 MiB shared saved data.",
+        value="Profiles and code-based game, party, and team tools. No trial or free AI credits.",
         inline=False,
     )
     for p in PRODUCTS.values():
@@ -79,11 +115,24 @@ def plan_embed() -> discord.Embed:
             continue
         e.add_field(
             name=f"{p.name} · ${p.price_cents // 100}.{p.price_cents % 100:02d}/month",
-            value=product_text(p),
+            value="\n".join(
+                f"{count:,} {label}"
+                for key, label in [
+                    ("chat", "chat attempts"),
+                    ("reasoning", "advanced reasoning attempts"),
+                    ("search", "web searches"),
+                    ("images", "image generations"),
+                ]
+                if (count := p.allowances.get(key, 0))
+            ),
             inline=False,
         )
     e.set_footer(
-        text="AI chat: 8,000 input / 500 output tokens. Reasoning: 2,000 total output. One search or image per attempt. Tool availability must pass launch review."
+        text=(
+            "Monthly USD price per server, before any applicable taxes. Allowances do not roll over. "
+            "Daily availability limits also apply; temporarily unavailable features resume as capacity resets. "
+            "No voice features, image editing, or image hosting are included."
+        )
     )
     return e
 
@@ -211,11 +260,7 @@ class PrepaidClientMixin(_PaidBase):
 
         while True:
             try:
-                evidence = runtime().evidence()
-                if (
-                    evidence.get("approved") is True
-                    and evidence.get("storage_lifecycle_verified") is True
-                ):
+                if runtime().storage_ready():
                     paths = {
                         "profiles": os.getenv("PROFILE_DATABASE_PATH", "data/profiles.sqlite3"),
                         "chat": self.config.chat_database_path or "",
@@ -263,12 +308,25 @@ class PrepaidClientMixin(_PaidBase):
 
         @app_commands.command(
             name="plans",
-            description="Privately view free tools and preview paid AI plans. No purchase occurs.",
+            description="Privately view free tools and AI plans, with Discord checkout when available.",
         )
         async def plans(interaction: discord.Interaction):
-            await interaction.response.send_message(
-                embed=plan_embed(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
-            )
+            skus = active_plan_skus(self.config)
+            embed = plan_embed(checkout_available=skus is not None)
+            view = plan_view(skus)
+            if view is None:
+                await interaction.response.send_message(
+                    embed=embed,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                await interaction.response.send_message(
+                    embed=embed,
+                    view=view,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
 
         @app_commands.command(
             name="usage",
@@ -338,7 +396,7 @@ class PrepaidClientMixin(_PaidBase):
         if not enforcing():
             return await super().generate_image(prompt, scope, settings_snapshot)
         async with self._request_slot(scope):
-            if runtime().evidence().get("image_contract_verified") is not True:
+            if not runtime().image_ready():
                 raise PaidOperationError(
                     "Image generation is not enabled until its price and availability are verified."
                 )

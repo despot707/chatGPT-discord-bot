@@ -3,13 +3,21 @@
     "name": "Sidecord Ai",
     "shortName": "Sidecord Ai",
     "tagline": "Good company. Better conversations.",
-    "description": "AI-powered conversations and game-night help for your Discord server. Ask questions, discuss screenshots and polls, compare shared Steam libraries, and build teams. Member-controlled profiles keep preferences private by default."
+    "description": "AI-powered conversations and game-night help for your Discord server. Ask questions, discuss screenshots and polls, find games, and build teams. Member-controlled profiles keep preferences private by default."
   },
   "baseUrl": "https://sidecord-ai.com",
-  "inviteUrl": "",
+  "inviteUrl": "https://discord.com/oauth2/authorize?client_id=1365724363722068120&scope=bot%20applications.commands&permissions=274878024704&integration_type=0",
   "supportUrl": "https://github.com/despot707/chatGPT-discord-bot/issues",
   "sourceUrl": "https://github.com/despot707/chatGPT-discord-bot",
   "saleStatus": "coming_soon",
+  "checkout": {
+    "applicationId": "1365724363722068120",
+    "skus": {
+      "basic": "1554920142532513832",
+      "plus": "1554920641088593990",
+      "premium": "1554920977488551936"
+    }
+  },
   "pricing": {
     "source": "docs/prepaid-plans.md"
   }

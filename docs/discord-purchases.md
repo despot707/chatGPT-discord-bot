@@ -1,30 +1,40 @@
 # Discord purchase reconciliation
 
-The Discord adapter is an optional access-reconciliation layer for Sidecord Ai's prepaid plans. It does not create a checkout, verify a financial statement, or turn a Discord entitlement into proof of payment. Sales stay disabled (`site/site.config.json` uses `coming_soon`) until the external launch requirements are satisfied.
+Native Discord subscriptions establish service access. They do not establish the developer's payout or net revenue. The bot authenticates Discord API records and grants one bounded allowance for each current subscription period without waiting for a manually imported invoice.
 
-## Configuration
-
-The defaults preserve the personal bot:
+## Native production configuration
 
 ```dotenv
-DISCORD_PURCHASE_MODE=off
+PREPAID_MODE=enforce
+DISCORD_PURCHASE_MODE=enforce
+DISCORD_FUNDING_MODE=entitlement
 DISCORD_APPLICATION_ID=1365724363722068120
-DISCORD_SKU_MAP=
+DISCORD_SKU_MAP=1554920142532513832:basic,1554920641088593990:plus,1554920977488551936:premium
+PREPAID_DATABASE_PATH=/app/data/prepaid.sqlite3
+HARD_BUDGET_ENABLED=true
+BUDGET_DATABASE_PATH=/app/data/budget.sqlite3
+BUDGET_MONTHLY_USD=10
+BUDGET_LUNA_MONTHLY_USD=7
+BUDGET_TIMEZONE=America/Los_Angeles
 ```
 
-The application ID is Sidecord Ai's public Discord application ID. Draft monthly USD guild-subscription SKUs created September 30, 2026 are:
+Use the actual previously initialized global budget. An opening amount is a one-time reconciliation input, never a reason to recreate or reset a ledger. The deployment record documents activation and publication separately.
 
-| Product | Draft SKU ID | Interval | Currency |
-|---|---:|---|---|
-| Basic | `1554920142532513832` | Monthly | USD |
-| Plus | `1554920641088593990` | Monthly | USD |
-| Premium | `1554920977488551936` | Monthly | USD |
+| Product | SKU ID | Price / month |
+|---|---:|---:|
+| Basic | `1554920142532513832` | $1.99 |
+| Plus | `1554920641088593990` | $4.99 |
+| Premium | `1554920977488551936` | $9.99 |
 
-These SKUs are unpublished and not approved for sale. Artwork upload is pending browser file-URL permission. Checkout remains unpublished; provider-contract and financial-settlement validation are still required. The corresponding comma-separated map syntax is `1554920142532513832:basic,1554920641088593990:plus,1554920977488551936:premium`; document it only, and do not place it in the live environment or enable purchase modes/approval flags. Supported products are `basic`, `plus`, and `premium` only.
+The public [Discord storefront](https://discord.com/application-directory/1365724363722068120/store) uses guild subscriptions: one purchase covers the chosen server. Publish each SKU with Store & API visibility and add it in Manage Store. Publishing a SKU and displaying it in a storefront are separate steps.
 
-`off` disables purchase polling and keeps the personal bot path. `observe` requires a numeric application ID and nonempty SKU map, fetches Discord's SKU, entitlement, and subscription records, and records current access without granting credits. `enforce` performs the same complete REST reconciliation and may apply only reviewed paid-period settlements. It also requires `PREPAID_MODE=enforce`, a recent complete snapshot, and every existing approval and cost-evidence gate described in [prepaid plans](prepaid-plans.md). Leave approvals false until their evidence has been independently verified. Do not enable enforcement as a test or to try a guessed SKU.
+The adapter accepts only mapped guild-subscription SKUs belonging to this app, application-subscription entitlements, and matching current subscription periods. Null entitlement end dates are normal for ongoing subscriptions. Test entitlements, gifts, unknown types, wrong app/SKU/guild identities, and missing or conflicting period records do not grant access. Startup, relevant gateway events, and a 60-second timer refresh the complete snapshot. Failed reconciliation blocks paid requests once freshness expires.
 
-The adapter accepts only mapped guild-subscription SKUs belonging to the configured application. Test entitlements, gifts, one-time/add-on SKUs, unsupported products, missing identity/period fields, and mismatched subscription records do not grant credit. Startup, entitlement/subscription events, and a 60-second timer trigger reconciliation. Each completed pass walks the REST records and replaces the current access snapshot; a failed or incomplete pass leaves the freshness gate expired. Enforce requires a matching complete snapshot at most five minutes old. When a current entitlement/subscription period no longer matches a credited settlement, the adapter revokes that adapter-owned grant, including when a renewal replaces the old period.
+Each grant key binds app, entitlement, subscription, and period. Replays never refill quota. A renewal grants the new period once. Expiry, deletion, disappearance, or replacement revokes old access; cancellation preserves the remaining authenticated period. A team-owner discount can establish access but records no revenue. Native grants never increase `infrastructure_funding()`.
+
+## Legacy settlement mode
+
+The following commands apply only to `DISCORD_FUNDING_MODE=settlement`. This separate accounting mode requires actual reviewed financial evidence. It is not a requirement for native Discord access and must not be populated with guessed invoices or assumed net revenue.
 
 ## Review each settlement before import
 
@@ -90,9 +100,3 @@ python -m src.discord_purchase_revoke \
 ```
 
 Allowed reasons are `refund`, `chargeback`, and `payment_reversal`. This command revokes unused access and permanently records that the receipt must not fund future grants, even if Discord still reports active access. It does not return money through Discord or Stripe and does not erase already incurred usage. Repeating identical evidence is idempotent; changing a recorded reversal's evidence is rejected. Keep the source records private. Resolve any erroneous reversal through an audited correction process, not by editing the database or reusing the receipt.
-
-## Still required before sales
-
-Local verification on September 30, 2026: 458 tests passed and 3 platform-specific tests skipped on Windows; all 26 purchase/import/revocation tests passed. Ruff lint/format, mypy, compilation, dependency consistency, and 68 static-site checks passed. These checks use fake Discord records and temporary databases; they do not prove live checkout, financial-export fields, or production activation.
-
-Finish Discord's current developer verification and monetization onboarding, create and verify real guild-subscription SKUs, test with approved non-production purchases, establish private financial-evidence retention and refund/chargeback procedures, and verify current hosting/provider spending limits. Then complete the prepaid approval gates and review the public customer disclosures. Keep the site's sale status at `coming_soon` until those steps and a real checkout/customer support path are in place. There is no private HTTP dashboard for purchase evidence; do not upload receipts or settlement files to the public site.

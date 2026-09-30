@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.ai_access import ai_disabled, parse_ai_access_mode
+from src.budget import BudgetLedger
 from src.prepaid import FREE_STORAGE_BYTES, Denied, Ledger, integer
 from src.prepaid_gateway import Gateway
 
@@ -40,6 +41,7 @@ class Runtime:
         self.approval_path = approval_path
         self.clock = clock
         self.gateway: Gateway | None = None
+        self._budget: BudgetLedger | None = None
         self._recent: dict[tuple[int, int], float] = {}
         self._housekeeping: dict[int, float] = {}
         self._housekeeping_global: tuple[float, int] = (0, 0)
@@ -77,8 +79,12 @@ class Runtime:
             ) from None
 
     def ready(self):
-        data = self.evidence()
-        from src.discord_purchases import PurchaseDenied, assert_purchase_current, sku_map
+        from src.discord_purchases import (
+            PurchaseDenied,
+            assert_purchase_current,
+            funding_mode,
+            sku_map,
+        )
 
         if os.getenv("DISCORD_PURCHASE_MODE", "off") != "enforce":
             raise PurchaseDenied(
@@ -90,6 +96,12 @@ class Runtime:
             sku_map(os.getenv("DISCORD_SKU_MAP", "")),
             clock=self.clock,
         )
+        if funding_mode() == "entitlement":
+            # Discord authorizes service access. It does not prove a payout.
+            # Owner-funded requests remain bounded by the existing shared cap.
+            self.global_budget()
+            return
+        data = self.evidence()
         for key in (
             "approved",
             "receipts_verified",
@@ -113,6 +125,34 @@ class Runtime:
             raise Denied(
                 "Service capacity is paused: prepaid infrastructure funding is insufficient."
             )
+
+    def global_budget(self) -> BudgetLedger:
+        if os.getenv("HARD_BUDGET_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            raise Denied("Commercial AI requires the durable global API budget.")
+        if self._budget is None:
+            from src.providers import ProviderManager
+
+            policy, path, opening = ProviderManager.budget_settings(os.environ)
+            self._budget = BudgetLedger(policy, path, opening_month_spend_micros=opening)
+        return self._budget
+
+    def image_ready(self) -> bool:
+        from src.discord_purchases import funding_mode
+
+        self.ready()
+        return (
+            funding_mode() == "entitlement"
+            or self.evidence().get("image_contract_verified") is True
+        )
+
+    def storage_ready(self) -> bool:
+        from src.discord_purchases import funding_mode
+
+        if funding_mode() == "entitlement":
+            self.ready()
+            return True
+        data = self.evidence()
+        return data.get("approved") is True and data.get("storage_lifecycle_verified") is True
 
     def core(self, guild: int, user: int):
         """Bound local, code-based operations without a paid entitlement."""
@@ -144,6 +184,7 @@ class Runtime:
                     api_key=key, base_url="https://api.openai.com/v1", max_retries=0, timeout=45
                 ),
                 ready=self.ready,
+                budget=self.global_budget(),
             )
         return self.gateway
 
@@ -178,15 +219,17 @@ class PaidManager:
             provider_type, "value", provider_type
         ) not in (None, "openai"):
             raise Denied("This model is not included in a metered plan.")
-        # Native search is an explicit add-on action, never automatically consumed
-        # because a legacy flag globally enables search.
+        # Web can be used naturally when the answer needs current information.
+        # The gateway charges a search allowance only if its tool actually runs.
         search = bool(kwargs.get("require_web_search", False))
+        reasoning = bool(kwargs.get("reasoning_requested", False))
         result = await self.rt.model_gateway().complete(
             scope[0],
             scope[2],
             messages,
-            reasoning=bool(kwargs.get("reasoning_requested", False)),
+            reasoning=reasoning,
             search=search,
+            allow_web=bool(web_search) and not reasoning and not search,
             images=images,
         )
         from src.providers import CompletionResult, ProviderType
@@ -194,7 +237,7 @@ class PaidManager:
         return CompletionResult(
             result,
             ProviderType.OPENAI,
-            "gpt-4.1-mini" if search else "gpt-6-luna",
+            "gpt-6-luna",
             (ProviderType.OPENAI,),
         )
 

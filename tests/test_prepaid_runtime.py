@@ -42,6 +42,49 @@ def test_unreviewed_launch_is_locked(tmp_path):
         rt.ready()
 
 
+def native_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISCORD_PURCHASE_MODE", "enforce")
+    monkeypatch.setenv("DISCORD_FUNDING_MODE", "entitlement")
+    monkeypatch.setenv("DISCORD_APPLICATION_ID", "222")
+    monkeypatch.setenv("DISCORD_SKU_MAP", "111:basic")
+    monkeypatch.setenv("HARD_BUDGET_ENABLED", "true")
+    monkeypatch.setenv("BUDGET_DATABASE_PATH", str(tmp_path / "budget.sqlite3"))
+    monkeypatch.setenv("BUDGET_OPENING_MONTH_SPEND_USD", "0")
+
+
+def test_native_access_requires_current_authenticated_snapshot(tmp_path, monkeypatch):
+    native_mode(monkeypatch, tmp_path)
+    rt, _ = make(tmp_path, manifest())
+    with pytest.raises(Denied):
+        rt.ready()
+    assert rt._budget is None
+
+
+def test_native_access_uses_real_global_cap_without_fabricated_payment(tmp_path, monkeypatch):
+    native_mode(monkeypatch, tmp_path)
+    monkeypatch.setattr("src.discord_purchases.assert_purchase_current", lambda *args, **kw: None)
+    rt, ledger = make(tmp_path, manifest())
+    rt.ready()
+    assert rt.global_budget().snapshot()["monthly_limit_micros"] == 10_000_000
+    assert ledger.infrastructure_funding() == 0
+    assert rt.image_ready()
+    assert rt.storage_ready()
+    monkeypatch.setenv("HARD_BUDGET_ENABLED", "false")
+    with pytest.raises(Denied, match="durable global API budget"):
+        rt.ready()
+
+
+def test_native_access_cannot_raise_owner_cap(tmp_path, monkeypatch):
+    from src.providers import ProviderError
+
+    native_mode(monkeypatch, tmp_path)
+    monkeypatch.setenv("BUDGET_MONTHLY_USD", "11")
+    monkeypatch.setattr("src.discord_purchases.assert_purchase_current", lambda *args, **kw: None)
+    rt, _ = make(tmp_path, manifest())
+    with pytest.raises(ProviderError, match="at most"):
+        rt.ready()
+
+
 def test_launch_pause_prevents_paid_sdk_initialization(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_ACCESS_MODE", "disabled")
     rt, _ = make(tmp_path, manifest())
@@ -98,6 +141,41 @@ async def test_missing_scope_never_uses_legacy_manager(tmp_path):
     with pytest.raises(Denied):
         await manager.complete(messages=[{"role": "user", "content": "hi"}])
     legacy.complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "web,reasoning,forced,allowed",
+    [
+        (True, False, False, True),
+        (True, True, False, False),
+        (True, False, True, False),
+        (False, False, False, False),
+    ],
+)
+async def test_paid_routing_keeps_luna_and_optional_web(
+    tmp_path, monkeypatch, web, reasoning, forced, allowed
+):
+    from src.prepaid_runtime import SCOPE
+
+    rt, _ = make(tmp_path, manifest())
+    gateway = NS(complete=AsyncMock(return_value="answer"))
+    monkeypatch.setattr(rt, "model_gateway", lambda: gateway)
+    manager = PaidManager(NS(complete=AsyncMock()), rt)
+    token = SCOPE.set((1, 2, 3))
+    try:
+        answer = await manager.complete(
+            [{"role": "user", "content": "hello"}],
+            web_search=web,
+            reasoning_requested=reasoning,
+            require_web_search=forced,
+        )
+    finally:
+        SCOPE.reset(token)
+    assert answer.model == "gpt-6-luna"
+    assert gateway.complete.call_args.kwargs["allow_web"] is allowed
+    assert gateway.complete.call_args.kwargs["reasoning"] is reasoning
+    assert gateway.complete.call_args.kwargs["search"] is forced
 
 
 def test_housekeeping_allows_same_interaction_checks_but_throttles_new_ones(tmp_path, monkeypatch):

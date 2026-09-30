@@ -1,8 +1,7 @@
-"""Authenticated Discord access reconciliation with separately reviewed settlement facts.
+"""Authenticated Discord access reconciliation and separate financial evidence.
 
-Discord entitlements are access evidence, not payment receipts. This adapter only
-credits a prepaid grant after a complete authenticated snapshot and an operator
-reviewed, period-specific settlement record agree on every identity and date.
+Entitlement mode grants bounded service from verified Discord access and never
+records it as payment. Settlement mode retains reviewed invoice reconciliation.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from typing import Callable
 
 import discord
 
-from src.prepaid import PRODUCTS, Denied, Ledger, Payment, integer
+from src.prepaid import PRODUCTS, AccessGrant, Denied, Ledger, Payment, integer
 
 MAX_ENTITLEMENTS = 10000
 MAX_SUBSCRIPTIONS_PER_USER = 1000
@@ -37,6 +36,14 @@ def purchase_mode(value: str) -> str:
     if value not in {"off", "observe", "enforce"}:
         raise Denied("Invalid Discord purchase mode.")
     return value
+
+
+def funding_mode(value: str | None = None) -> str:
+    """Settlement is the conservative default; entitlement is explicit opt-in."""
+    mode = os.getenv("DISCORD_FUNDING_MODE", "settlement") if value is None else value
+    if mode not in {"settlement", "entitlement"}:
+        raise Denied("Invalid Discord funding mode.")
+    return mode
 
 
 def sku_map(raw: str) -> dict[int, str]:
@@ -68,10 +75,10 @@ def _seconds(value: datetime | None) -> int:
     return int(value.timestamp())
 
 
-def _identity(application_id: int, mapping: dict[int, str], *, credit: bool) -> str:
+def _identity(application_id: int, mapping: dict[int, str], *, credit: bool, mode: str) -> str:
     return hashlib.sha256(
         json.dumps(
-            [application_id, sorted(mapping.items()), credit], separators=(",", ":")
+            [application_id, sorted(mapping.items()), credit, mode], separators=(",", ":")
         ).encode()
     ).hexdigest()
 
@@ -92,35 +99,68 @@ def assert_purchase_current(
             ).fetchall()
         state = {row["key"]: row["value"] for row in rows}
         stamp = int(state["complete_snapshot_at"])
+        mode = funding_mode()
         if (
-            state["snapshot_identity"] == _identity(application_id, mapping, credit=True)
+            state["snapshot_identity"] == _identity(application_id, mapping, credit=True, mode=mode)
             and 0 <= clock() - stamp <= SNAPSHOT_MAX_AGE_SECONDS
         ):
-            _assert_grants_bound(ledger, mapping, int(clock()))
+            _assert_grants_bound(ledger, mapping, int(clock()), mode=mode)
             return
     except (sqlite3.Error, KeyError, ValueError):
         pass
     raise PurchaseDenied("Discord purchase reconciliation is stale or mismatched.")
 
 
-def _assert_grants_bound(ledger: Ledger, mapping: dict[int, str], now: int) -> None:
+def _assert_grants_bound(ledger: Ledger, mapping: dict[int, str], now: int, *, mode: str) -> None:
     """No active manually inserted grant may bypass Discord access matching."""
     with ledger.db() as db:
         rows = db.execute(
             """
-            SELECT g.receipt,g.payment,s.facts,i.receipt_id AS invalid_id,
+            SELECT g.receipt,g.payment,g.limits,g.storage,
+                   g.guild AS grant_guild,g.product AS grant_product,
+                   g.starts AS grant_starts,g.ends AS grant_ends,s.facts,
+                   p.payload AS period_payload,
+                   i.receipt_id AS invalid_id,
                    a.entitlement_id AS access_id,
-                   a.subscription_id,a.guild_id,a.sku_id,a.product,a.starts,a.ends
+                   a.subscription_id,a.guild_id,a.user_id,a.sku_id,a.product,a.starts,a.ends
             FROM prepaid_grants g
             LEFT JOIN discord_purchase_settlement s ON s.receipt_id=g.receipt
+            LEFT JOIN discord_access_period p ON p.receipt_id=g.receipt
             LEFT JOIN discord_purchase_invalid i ON i.receipt_id=g.receipt
-            LEFT JOIN discord_purchase_access a ON a.entitlement_id=s.entitlement_id
+            LEFT JOIN discord_purchase_access a
+              ON a.entitlement_id=COALESCE(s.entitlement_id,p.entitlement_id)
             WHERE g.revoked=0 AND g.starts<=? AND g.ends>?
         """,
             (now, now),
         ).fetchall()
     for row in rows:
         try:
+            payment = json.loads(row["payment"])
+            if mode == "entitlement":
+                grant = AccessGrant(**payment["access"])
+                if (
+                    payment.get("source") != "discord_entitlement"
+                    or row["invalid_id"] is not None
+                    or row["receipt"] != grant.receipt_id
+                    or row["payment"] != ledger.access_payload(grant)
+                    or row["period_payload"] != row["payment"]
+                    or grant.product != mapping.get(grant.sku_id)
+                    or row["grant_guild"] != grant.guild_id
+                    or row["grant_product"] != grant.product
+                    or row["grant_starts"] != grant.starts
+                    or row["grant_ends"] != grant.ends
+                    or json.loads(row["limits"]) != PRODUCTS[grant.product].allowances
+                    or row["storage"] != PRODUCTS[grant.product].storage_bytes
+                    or row["access_id"] != grant.entitlement_id
+                    or row["subscription_id"] != grant.subscription_id
+                    or row["guild_id"] != grant.guild_id
+                    or row["sku_id"] != grant.sku_id
+                    or row["product"] != grant.product
+                    or row["starts"] != grant.starts
+                    or row["ends"] != grant.ends
+                ):
+                    raise ValueError()
+                continue
             facts = Settlement(**json.loads(row["facts"]))
             access = Access(
                 row["access_id"],
@@ -132,7 +172,6 @@ def _assert_grants_bound(ledger: Ledger, mapping: dict[int, str], now: int) -> N
                 row["starts"],
                 row["ends"],
             )
-            payment = json.loads(row["payment"])
             expected = Payment(
                 facts.receipt_id,
                 facts.guild_id,
@@ -151,7 +190,7 @@ def _assert_grants_bound(ledger: Ledger, mapping: dict[int, str], now: int) -> N
                 or payment != expected.__dict__
             ):
                 raise ValueError()
-        except (TypeError, KeyError, ValueError):
+        except (TypeError, KeyError, ValueError, Denied):
             raise PurchaseDenied(
                 "An active grant lacks matching reviewed Discord purchase evidence."
             ) from None
@@ -212,6 +251,11 @@ class DiscordPurchases:
               guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
               sku_id INTEGER NOT NULL, product TEXT NOT NULL,
               starts INTEGER NOT NULL, ends INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS discord_access_period(
+              entitlement_id INTEGER NOT NULL, starts INTEGER NOT NULL,
+              ends INTEGER NOT NULL, receipt_id TEXT NOT NULL UNIQUE,
+              payload TEXT NOT NULL,
+              PRIMARY KEY(entitlement_id,starts,ends));
             CREATE TABLE IF NOT EXISTS discord_purchase_settlement(
               receipt_id TEXT PRIMARY KEY, facts TEXT NOT NULL,
               entitlement_id INTEGER NOT NULL, guild_id INTEGER NOT NULL,
@@ -306,11 +350,17 @@ class DiscordPurchases:
             raise Denied("Invalid reviewed payment reversal evidence.")
         fields = (reason, evidence_sha256, evidence_reference, reviewed_by)
         with self.ledger.db() as db:
-            if not db.execute(
-                "SELECT 1 FROM discord_purchase_settlement WHERE receipt_id=?",
-                (receipt_id,),
-            ).fetchone():
-                raise Denied("No reviewed Discord settlement has this receipt ID.")
+            if not (
+                db.execute(
+                    "SELECT 1 FROM discord_purchase_settlement WHERE receipt_id=?",
+                    (receipt_id,),
+                ).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM discord_access_period WHERE receipt_id=?",
+                    (receipt_id,),
+                ).fetchone()
+            ):
+                raise Denied("No Discord settlement or access period has this receipt ID.")
             old = db.execute(
                 "SELECT reason,evidence_sha256,evidence_reference,reviewed_by "
                 "FROM discord_purchase_invalid WHERE receipt_id=?",
@@ -345,11 +395,12 @@ class DiscordPurchases:
                 ("complete_snapshot_at", "0"),
             )
 
-    async def _fetch_access(self, client: discord.Client) -> tuple[list[Access], int]:
+    async def _fetch_access(self, client: discord.Client, *, mode: str) -> tuple[list[Access], int]:
         skus = {sku.id: sku for sku in await client.fetch_skus()}
         candidate_by_entitlement: dict[int, list[Settlement]] = {}
-        for facts in self._settlements():
-            candidate_by_entitlement.setdefault(facts.entitlement_id, []).append(facts)
+        if mode == "settlement":
+            for facts in self._settlements():
+                candidate_by_entitlement.setdefault(facts.entitlement_id, []).append(facts)
         for sku_id, product in self.mapping.items():
             sku = skus.get(sku_id)
             if (
@@ -380,12 +431,11 @@ class DiscordPurchases:
                 ent.type != discord.EntitlementType.application_subscription
                 or ent.deleted
                 or ent.guild_id is None
-                or ent.starts_at is None
-                or ent.ends_at is None
             ):
                 continue
-            starts, ends = _seconds(ent.starts_at), _seconds(ent.ends_at)
-            if not starts <= now < ends:
+            starts = _seconds(ent.starts_at) if ent.starts_at is not None else None
+            ends = _seconds(ent.ends_at) if ent.ends_at is not None else None
+            if (starts is not None and starts > now) or (ends is not None and now >= ends):
                 continue
             sku = skus[ent.sku_id]
             matches = []
@@ -406,6 +456,25 @@ class DiscordPurchases:
                         raise Denied("Discord subscription snapshot is incomplete.")
                     if ent.id in sub.entitlement_ids and ent.sku_id in sub.sku_ids:
                         matches.append(sub)
+            elif mode == "entitlement":
+                # discord.py 2.7 drops subscription_id from Entitlement although
+                # Discord includes it in its raw entitlement API example. A guild
+                # grant can have no user_id, so the user-filtered list cannot help.
+                raw = await client.http.get_entitlement(self.application_id, ent.id)
+                raw_id = str(raw.get("subscription_id") or "")
+                if (
+                    str(raw.get("id")) != str(ent.id)
+                    or str(raw.get("application_id")) != str(self.application_id)
+                    or str(raw.get("sku_id")) != str(ent.sku_id)
+                    or str(raw.get("guild_id")) != str(ent.guild_id)
+                    or raw.get("deleted") is not False
+                    or raw.get("type") != discord.EntitlementType.application_subscription.value
+                ):
+                    raise Denied("Discord entitlement detail conflicts with its list result.")
+                if not raw_id.isdigit() or int(raw_id) <= 0:
+                    pending += 1
+                    continue
+                matches.append(await sku.fetch_subscription(int(raw_id)))
             else:
                 pending += 1
                 continue
@@ -417,12 +486,17 @@ class DiscordPurchases:
                 _seconds(sub.current_period_end),
             )
             if (
-                sub.status
-                not in (discord.SubscriptionStatus.active, discord.SubscriptionStatus.ending)
+                (
+                    mode == "settlement"
+                    and sub.status
+                    not in (discord.SubscriptionStatus.active, discord.SubscriptionStatus.ending)
+                )
                 or (ent.user_id is not None and sub.user_id != ent.user_id)
                 or ent.id not in sub.entitlement_ids
                 or ent.sku_id not in sub.sku_ids
-                or not starts <= period_start <= now < period_end <= ends
+                or not period_start <= now < period_end
+                or (starts is not None and period_start < starts)
+                or (ends is not None and period_end > ends)
                 or period_end - period_start > 32 * 86400
             ):
                 continue
@@ -438,11 +512,123 @@ class DiscordPurchases:
                     period_end,
                 )
             )
+        periods: dict[tuple[int, int, int, int, int], int] = {}
+        for row in access:
+            period = (row.subscription_id, row.guild_id, row.sku_id, row.starts, row.ends)
+            previous = periods.setdefault(period, row.entitlement_id)
+            if previous != row.entitlement_id:
+                raise Denied("Discord subscription period has conflicting entitlements.")
         return access, pending
+
+    def _reconcile_access(self, access: list[Access], pending: int) -> dict[str, int]:
+        """Commit the complete access snapshot and period grants as one transaction."""
+        now = int(self.clock())
+        grants = []
+        for row in access:
+            receipt = (
+                f"discord-access:{self.application_id}:{row.entitlement_id}:"
+                f"{row.subscription_id}:{row.starts}:{row.ends}"
+            )
+            grants.append(
+                AccessGrant(
+                    receipt,
+                    row.guild_id,
+                    row.product,
+                    row.starts,
+                    row.ends,
+                    self.application_id,
+                    row.entitlement_id,
+                    row.subscription_id,
+                    row.sku_id,
+                )
+            )
+        desired = {grant.receipt_id for grant in grants}
+        revoked = credited = 0
+        with self.ledger.db() as db:
+            rows = db.execute(
+                "SELECT receipt,payment,starts,ends FROM prepaid_grants WHERE revoked=0"
+            ).fetchall()
+            for row in rows:
+                basis = json.loads(row["payment"])
+                if basis.get("source") != "discord_entitlement":
+                    if row["starts"] <= now < row["ends"]:
+                        raise Denied(
+                            "Existing active grant needs audited Discord access migration."
+                        )
+                    continue
+                if row["receipt"] not in desired:
+                    db.execute(
+                        "UPDATE prepaid_grants SET revoked=1 WHERE receipt=?",
+                        (row["receipt"],),
+                    )
+                    revoked += 1
+            db.execute("DELETE FROM discord_purchase_access")
+            db.executemany(
+                "INSERT INTO discord_purchase_access VALUES(?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        row.entitlement_id,
+                        row.subscription_id,
+                        row.guild_id,
+                        row.user_id,
+                        row.sku_id,
+                        row.product,
+                        row.starts,
+                        row.ends,
+                    )
+                    for row in access
+                ],
+            )
+            for grant in grants:
+                payload = self.ledger.access_payload(grant)
+                old = db.execute(
+                    "SELECT receipt_id,payload FROM discord_access_period "
+                    "WHERE entitlement_id=? AND starts=? AND ends=?",
+                    (grant.entitlement_id, grant.starts, grant.ends),
+                ).fetchone()
+                if old:
+                    if old["receipt_id"] != grant.receipt_id or old["payload"] != payload:
+                        raise Denied("Discord access period changed identity or terms.")
+                else:
+                    db.execute(
+                        "INSERT INTO discord_access_period VALUES(?,?,?,?,?)",
+                        (
+                            grant.entitlement_id,
+                            grant.starts,
+                            grant.ends,
+                            grant.receipt_id,
+                            payload,
+                        ),
+                    )
+                if db.execute(
+                    "SELECT 1 FROM discord_purchase_invalid WHERE receipt_id=?",
+                    (grant.receipt_id,),
+                ).fetchone():
+                    continue
+                if self.ledger._credit_access(db, grant):
+                    credited += 1
+            db.execute(
+                "INSERT OR REPLACE INTO discord_purchase_state VALUES(?,?)",
+                ("complete_snapshot_at", str(now)),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO discord_purchase_state VALUES(?,?)",
+                (
+                    "snapshot_identity",
+                    _identity(self.application_id, self.mapping, credit=True, mode="entitlement"),
+                ),
+            )
+        return {
+            "observed": len(access),
+            "pending": pending,
+            "credited": credited,
+            "revoked": revoked,
+        }
 
     async def reconcile(self, client: discord.Client, *, credit: bool) -> dict[str, int]:
         """Only a completed REST walk changes access or credits reviewed receipts."""
         self.invalidate()
+        mode = funding_mode()
         if client.application_id != self.application_id:
             raise Denied("Discord application identity does not match configuration.")
         if credit and (
@@ -451,9 +637,11 @@ class DiscordPurchases:
         ):
             raise Denied("Discord credits require reviewed commercial enforcement mode.")
         generation = self._generation
-        access, pending = await self._fetch_access(client)
+        access, pending = await self._fetch_access(client, mode=mode)
         if self._generation != generation:
             raise Denied("Discord purchase changed during reconciliation; retry required.")
+        if credit and mode == "entitlement":
+            return self._reconcile_access(access, pending)
         seen = {row.entitlement_id: row for row in access}
         if self._generation != generation:
             raise Denied("Discord purchase changed during reconciliation; retry required.")
@@ -526,7 +714,7 @@ class DiscordPurchases:
                 ).fetchone()
             if active:
                 raise Denied("Existing active grant needs audited Discord purchase migration.")
-            _assert_grants_bound(self.ledger, self.mapping, int(self.clock()))
+            _assert_grants_bound(self.ledger, self.mapping, int(self.clock()), mode=mode)
         with self.ledger.db() as db:
             db.execute(
                 "INSERT OR REPLACE INTO discord_purchase_state VALUES(?,?)",
@@ -534,7 +722,10 @@ class DiscordPurchases:
             )
             db.execute(
                 "INSERT OR REPLACE INTO discord_purchase_state VALUES(?,?)",
-                ("snapshot_identity", _identity(self.application_id, self.mapping, credit=credit)),
+                (
+                    "snapshot_identity",
+                    _identity(self.application_id, self.mapping, credit=credit, mode=mode),
+                ),
             )
         return {
             "observed": len(access),

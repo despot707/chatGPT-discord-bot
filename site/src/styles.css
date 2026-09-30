@@ -102,6 +102,7 @@ h1 em { color: #607b25; font-weight: 400; }
 .price { font: 500 2.5rem var(--serif); letter-spacing: -.04em; }
 .price small { font: 400 .83rem var(--sans); color: #70786f; letter-spacing: 0; }
 .plan > p { color: var(--muted); font-size: .88rem; min-height: 2.8em; }
+.plan-purchase { display: inline-flex; margin-top: 1rem; }
 .allowances { display: grid; gap: .47rem; padding-top: .9rem; border-top: 1px solid var(--line); font-size: .84rem; }
 .allowance { display: flex; justify-content: space-between; gap: .7rem; }
 .allowance span:last-child { text-align: right; font-weight: 700; }

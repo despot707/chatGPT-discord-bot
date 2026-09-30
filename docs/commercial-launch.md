@@ -1,54 +1,39 @@
-# Public site and paid launch handoff
+# Sidecord launch record
 
-Reviewed September 30, 2026. The public website is separate from the Discord worker. Publishing the site does not enable payments or change the running bot.
+## Deployment target
 
-## Public application URLs
+- Application: Sidecord Ai, `1365724363722068120`.
+- Website: https://sidecord-ai.com (Cloudflare Pages project `discord-community-assistant`).
+- Railway: project `dc425081-5f97-413a-a35c-6aec9822d3df`, production `c5f721fc-4be7-44a9-9638-21869b37ab81`, service `1aa50efd-bc13-480e-b7c0-09c804271685`.
+- One replica; persistent volume at `/app/data`.
+- Monetization onboarding, team ownership, Stripe validation, and 2FA completed by the owner.
 
-| Public route | URL |
-|---|---|
-| Website | https://sidecord-ai.com/ |
-| Privacy Policy URL | https://sidecord-ai.com/privacy/ |
-| Terms of Service URL | https://sidecord-ai.com/terms/ |
-| Support | https://sidecord-ai.com/support/ |
-| Proposed plans | https://sidecord-ai.com/plans/ |
+## September 30 verification
 
-The initial free-tier site was deployed at revision `85b7a20d`. On September 30, 2026, the root, privacy, terms, support, plans, `styles.css`, and `favicon.svg` returned HTTP 200 and matched the local build byte for byte. Cloudflare's domain API reports association, verification, and validation active. The owner approved disabling analytics, and Cloudflare now reports “RUM is currently disabled for this zone.” Live checks found no `static.cloudflareinsights.com` injection. Desktop (2560 px) and mobile (390 px) layouts were visually checked with no horizontal overflow; screenshots are saved outside the repository under `work/sidecord-launch-proof`. The app name **Sidecord Ai**, description (“AI-powered conversations and game-night help for your Discord server. Ask questions, discuss screenshots and polls, compare shared Steam libraries, and build teams. Member-controlled profiles keep preferences private by default. Website and support: https://sidecord-ai.com”), tags (`ai`, `chatbot`, `community`, `gaming`, `utilities`), Terms URL, and Privacy URL were saved in General Information and remained saved after reload. Website and support are part of the description suffix; there are no separate Website or Support fields. The bot is not an official Discord or OpenAI product.
+The starting live deployment was `715235c7-0b47-4f5f-a306-0eaa6d71437c`, from the personal bot at `e08e4ff`. It connected to Discord but used `AI_ACCESS_MODE=disabled`. There was no live prepaid configuration and no budget database on its volume. The new native subscription integration replaces that preparation state; publication and deployment must be recorded from actual platform results.
 
-The latest production site revision is `5a7695c6`, deployed September 30, 2026 with Basic at $1.99 and 400 chat attempts. The live `/plans/` response matched the generated build exactly; the browser showed all three correct prices/allowances and the coming-soon purchase restriction. No analytics injection was present. This update changes the static pricing preview only.
+Before deployment, SQLite backups were created at `/app/data/launch-backup-20260930-211343`: catalog, profiles, and chat databases each passed `PRAGMA quick_check`. This backup does not delete or reset existing records.
 
-The live installation link provided was https://discord.com/oauth2/authorize?client_id=1365724363722068120. In both user and guild install contexts it contains only the `applications.commands` scope, with no `bot` scope. It does not establish that the bot can be added to a server; `inviteUrl` remains blank until an actual bot invite is confirmed. No permissions were changed.
+The public install link is now configured with `bot` and `applications.commands` scopes, requesting only View Channels, Send Messages, Send Messages in Threads, Read Message History, Embed Links, and Attach Files. Its explicit public URL reaches Discord's server picker:
 
-Portal readiness has advanced: on September 30, 2026, owner identity/onboarding and monetization onboarding cleared sufficiently for Manage SKUs to become available. Three draft monthly USD guild-subscription SKUs were created: Basic `1554920142532513832`, Plus `1554920641088593990`, and Premium `1554920977488551936`. They remain unpublished and are not approved for sale. SKU artwork upload is pending browser file-URL permission. Checkout remains unpublished; provider-contract and financial-settlement validation remain required. A working bot invite still needs verification.
+https://discord.com/oauth2/authorize?client_id=1365724363722068120&scope=bot%20applications.commands&permissions=274878024704&integration_type=0
 
-The public support route is https://github.com/despot707/chatGPT-discord-bot/issues. Repository issues were enabled and verified during this work. Members should use `/profile` -> **Privacy & data** for account data controls. A public issue is not a place to submit personal records, keys, or payment evidence. Establish a private escalation contact before sales.
+The existing API key's read-only model listing verified Luna and the September 8 Flare 2.5 snapshot. It did not list the old image snapshot or gpt-4.1-mini, so the commercial gateway uses Luna for chat/search and Flare for images. Model availability does not alone prove a successful paid request; live smoke results are recorded separately.
 
-## Readiness boundary
+## Publication steps
 
-The website describes an ongoing free tier for profiles and code-only game, party, and team features. It is not a trial and has no free AI credits. Basic ($1.99, 400 chats), Plus ($4.99), and Premium ($9.99) are proposed USD per-server monthly AI plans with finite allowances; Basic begins paid AI access. Draft monthly SKUs exist but are unpublished and not approved for sale. Purchases are not enabled, and no automatic charges can occur. Marketing does not show core operation or saved-data counts or offer add-ons for sale. Voice is unsupported and is neither included nor promised. Initially the operator funds hosting; future subscription revenue may help offset hosting costs; the Basic remainder estimate is illustrative and does not guarantee profit.
+1. Deploy the exact tested source with AI paused, native Discord access enforced, and the persistent $10 API ledger enabled ($7 Luna / $3 Extras, Pacific daily reset).
+2. Verify live startup, complete authenticated purchase reconciliation, and bounded model requests against that same ledger.
+3. Lift the AI pause; publish the three real guild-subscription SKUs with Store & API visibility and add them in Manage Store.
+4. Switch the website to `saleStatus: live`, deploy, and verify desktop/mobile checkout links and prices.
+5. Submit public bot-directory listings with accurate free/premium features and tags. A submitted review queue is not a public approved listing.
 
-Application code contains prepaid reservations plus [Discord purchase reconciliation](discord-purchases.md): explicit guild-subscription SKU mapping, authenticated access refresh, lifecycle events, and staging of independently reviewed settlement evidence. `Ledger.credit(Payment)` remains an internal accounting method, not payment authentication. The adapter does not derive invoice amounts or net proceeds from a Discord entitlement. The example approval file stays unapproved. Do not turn approval flags on merely because the website or offline tests pass.
+No manual invoice, assumed net revenue, or fabricated approval JSON is required for native Discord service access. Financial records remain separate. A real customer checkout/renewal is distinct from offline lifecycle tests and provider smoke tests.
 
-## Required before the first paid server
+## Interface references and boundaries
 
-1. **Complete Discord listing and installation readiness.** Owner identity/onboarding and monetization onboarding are cleared sufficiently to manage SKUs. Uploading SKU artwork is pending browser file-URL permission; the draft products remain unpublished and unapproved for sale. The current OAuth link lacks the `bot` scope, so a working bot invite still needs to be verified.
-2. **Private support and retention.** Confirm the operator identity/contact, a private escalation channel, production retention settings, backup expiry, server-removal cleanup, data export/deletion behavior, and incident handling. Current source defaults saved chat to 30 days, with expiry cleanup on access; this does not prove production configuration or immediate deletion of idle data. Keep the public policy consistent with verified operations.
-3. **Exercise the purchase integration before publication.** Draft guild-subscription SKU IDs now exist and are recorded in [Discord purchase reconciliation](discord-purchases.md); do not add their mapping to the live environment. Configure and test the supported integration in an approved staging setup before any live publication. Then complete artwork, approvals, and publication, and configure the reviewed `SKU_ID:product` mappings only when ready to activate. Each paid period must match authenticated app/SKU/guild/subscription identity and independently reviewed financial evidence. Test entitlements never become paid grants. One-time add-ons remain unsupported by this adapter and must not be offered for sale.
-4. **Resolve net funding before grants.** A Discord entitlement establishes access to a SKU and its period; it does not itself establish the exact settled net USD proceeds required by the present `Payment` contract. The importer records a human-reviewed receipt, exact gross/net USD amounts, period, evidence hash/reference, and reviewer; it cannot authenticate the external financial record. No actual Discord/Stripe export schema has been verified. Identify a source with the required immutable transaction identity and amounts, or review and test a revised conservative funding contract. Until then, `receipts_verified` must remain false.
-5. **Provider and resource evidence.** Verify actual account model access, current rates and usage fields, maximum per-request costs, storage lifecycle, and isolated commercial hosting/API projects. Configure native resource/spend controls and startup funding with evidence. Do not reuse unrelated project caps or count alerts as hard enforcement. Offline tests do not establish live prices or billing ceilings.
-6. **Purchase lifecycle acceptance test.** In a test environment prove purchase -> correct server allowance, replay -> no duplicate credit, renewal -> distinct grant, expiry -> access removal, refund -> revocation, concurrent requests -> no overdraft, and timeout -> retained reservation. Verify storage downgrade/grace/cleanup and export/deletion independently. Then perform a deliberately bounded live provider smoke test within the approved budget.
-7. **Enable a reviewed deployment.** Use one Linux writer in an isolated commercial environment. Record fresh operator evidence, set `PREPAID_MODE=enforce` only after all gates pass, and verify the deployed revision. `off` and `preview` preserve personal-bot behavior and are not commercial spending protection.
+[Dyno](https://dyno.gg/) separates its command/help navigation from Premium. [Discord Bot List](https://discordbotlist.com/) presents a direct Add Bot action and short, specific feature descriptions. Sidecord follows those useful patterns with a direct invite, a concise free-tools section, separate AI plans, and private `/plans` and `/usage` views.
 
-The production `chatGPT-discord-bot` service in Railway project `happy-nourishment` remains on the personal-bot branch `codex/modernize-discord-bot`, with one configured replica and the persistent `/app/data` volume. On September 30, the tested source revision `e08e4ff` was uploaded from a Git archive to this exact project/service/environment as deployment `715235c7-0b47-4f5f-a306-0eaa6d71437c`. The deployment succeeded. Startup logs explicitly confirm `AI_ACCESS_MODE=disabled`, no initialized AI providers, Discord connected in two guilds, private profiles ready, and 175,130 local game-catalog titles. The only production variable changed was `AI_ACCESS_MODE=disabled`; the API keys and existing budget settings were preserved. The bot's free profile and code-only gaming features remain available; AI requests receive the normal generic failure until paid activation is ready.
+Free features are profiles, local game discovery, parties, and team building. Paid features are AI chat, image understanding, explicit reasoning, available web lookups, and explicit image generation. Voice, image editing, external file hosting, and Steam-library import are not advertised as included. Regular errors remain generic; plan pages disclose finite monthly allowances and daily availability.
 
-This is a temporary AI launch pause, not a working payment flow. The commercial purchase adapter, separate free storage baseline, and paid allowances remain on the preparation branch and are not running in production. Draft SKUs exist, but none are approved or published; no live SKU mapping, checkout, approval flags, or paid subscription activation were enabled. Railway hosting is initially operator-funded, and future subscription revenue may offset it. A normal Railway redeploy reused the previous source, so the exact Git archive upload above was used and its startup behavior verified. No unrelated CLI-linked project was changed. Production retention and backup deletion remain unverified.
-
-## Official launch references
-
-- [Premium Apps onboarding](https://support-dev.discord.com/hc/en-us/articles/17708927296663-Premium-Apps-Onboarding)
-- [SKU and Store setup](https://support-dev.discord.com/hc/en-us/articles/17298449675927-Premium-Apps-SKU-and-Store-Setup)
-- [Required Premium Apps support for monetizing apps](https://support-dev.discord.com/hc/en-us/articles/23810643331735-Premium-Apps-Required-Support-for-Monetizing-Apps)
-- [Monetization Policy](https://support.discord.com/hc/en-us/articles/10575066024983-Monetization-Policy)
-- [Monetization Terms](https://support.discord.com/hc/en-us/articles/5330075836311-Monetization-Terms)
-- [App Directory content requirements](https://support-dev.discord.com/hc/en-us/articles/9489299950487-App-Directory-App-Content-Requirements-Policy)
-
-See also [monetization-compliance.md](monetization-compliance.md) for the platform checklist and [prepaid-plans.md](prepaid-plans.md) for allowance semantics and financial gates. Recheck platform requirements at activation; this document does not certify account eligibility or legal compliance.
+[Top.gg submissions](https://support.top.gg/hc/en-us/articles/23135162935708-How-to-Add-Your-Bot) require an online public bot and staff review. Directory OAuth authorizations are separate from Discord's own application settings. Pending authorizations or external reviews must be identified without claiming a public listing.

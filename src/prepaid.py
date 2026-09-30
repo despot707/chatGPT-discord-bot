@@ -1,8 +1,7 @@
 """Prepaid server allowances. Money is integer USD microdollars, never floats.
 
-This is the accounting boundary, NOT payment verification. Only a trusted receipt
-adapter may call credit(); Discord entitlements/test purchases alone do not prove
-payment amount, currency, settlement or renewal. No Discord command grants credit.
+Financial receipts and authenticated Discord subscription access have separate
+grant paths. Access grants never claim payment amount, settlement, or revenue.
 """
 
 from __future__ import annotations
@@ -153,6 +152,21 @@ class Payment:
     currency: str
 
 
+@dataclass(frozen=True)
+class AccessGrant:
+    """A bounded service allowance for one authenticated subscription period."""
+
+    receipt_id: str
+    guild_id: int
+    product: str
+    starts: int
+    ends: int
+    application_id: int
+    entitlement_id: int
+    subscription_id: int
+    sku_id: int
+
+
 def integer(value: object, minimum=0) -> int:
     if type(value) is not int or value < minimum or value > 2**63 - 1:
         raise Denied("Invalid allowance value.")
@@ -291,6 +305,74 @@ class Ledger:
             )
         return True
 
+    @staticmethod
+    def access_payload(grant: AccessGrant) -> str:
+        """Validate an access grant without representing it as a paid invoice."""
+        for value in (
+            grant.guild_id,
+            grant.application_id,
+            grant.entitlement_id,
+            grant.subscription_id,
+            grant.sku_id,
+        ):
+            integer(value, 1)
+        integer(grant.starts)
+        integer(grant.ends)
+        product = PRODUCTS.get(grant.product)
+        expected = (
+            f"discord-access:{grant.application_id}:{grant.entitlement_id}:"
+            f"{grant.subscription_id}:{grant.starts}:{grant.ends}"
+        )
+        if (
+            product is None
+            or product.kind != "subscription"
+            or grant.receipt_id != expected
+            or len(expected) > 180
+            or not grant.starts < grant.ends
+            or grant.ends - grant.starts > 32 * 86400
+        ):
+            raise Denied("Discord access period cannot fund this allowance.")
+        return json.dumps(
+            {"source": "discord_entitlement", "access": asdict(grant)},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _credit_access(self, db: sqlite3.Connection, grant: AccessGrant) -> bool:
+        encoded = self.access_payload(grant)
+        if grant.ends <= self.clock():
+            raise Denied("Discord access period has ended.")
+        old = db.execute(
+            "SELECT payment,revoked FROM prepaid_grants WHERE receipt=?", (grant.receipt_id,)
+        ).fetchone()
+        if old:
+            if old["payment"] != encoded:
+                raise Denied("Discord access period was assigned different facts.")
+            if old["revoked"]:
+                raise Denied("Revoked Discord access cannot be restored.")
+            return False
+        product = PRODUCTS[grant.product]
+        db.execute(
+            "INSERT INTO prepaid_grants(receipt,guild,product,starts,ends,payment,limits,storage) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                grant.receipt_id,
+                grant.guild_id,
+                grant.product,
+                grant.starts,
+                grant.ends,
+                encoded,
+                json.dumps(product.allowances),
+                product.storage_bytes,
+            ),
+        )
+        return True
+
+    def credit_access(self, grant: AccessGrant) -> bool:
+        """Called only after authenticated Discord entitlement reconciliation."""
+        with self.db() as db:
+            return self._credit_access(db, grant)
+
     def revoke(self, receipt_id: str) -> None:
         # Do not restore already dispatched costs. A refund cannot unspend an API call.
         with self.db() as db:
@@ -326,8 +408,17 @@ class Ledger:
                     f"SELECT COALESCE(SUM(reserved),0) FROM prepaid_requests WHERE receipt=? AND feature{comparator}'core' AND state!='cancelled'",
                     (row["receipt"],),
                 ).fetchone()[0]
-                paid = json.loads(row["payment"])["gross_micros"]
-                if held + COSTS[feature] > paid * pct // 100:
+                basis = json.loads(row["payment"])
+                if basis.get("source") == "discord_entitlement":
+                    product = PRODUCTS[row["product"]]
+                    ceiling = (
+                        product.allowances.get("core", 0) * COSTS["core"]
+                        if feature == "core"
+                        else product.max_api_cost
+                    )
+                else:
+                    ceiling = basis["gross_micros"] * pct // 100
+                if held + COSTS[feature] > ceiling:
                     continue
                 quota = json.loads(row["limits"]).get(feature, 0)
                 used = db.execute(
@@ -363,22 +454,37 @@ class Ledger:
         )
 
     def dispatch(self, rid: str):
+        self.dispatch_many([rid])
+
+    def dispatch_many(self, rids: list[str]):
+        """Mark a paired request dispatched atomically before provider I/O."""
+        if not rids or len(rids) != len(set(rids)):
+            raise Denied("Invalid usage reservations.")
         with self.db() as db:
-            row = db.execute(
-                "SELECT r.*,g.revoked,g.ends FROM prepaid_requests r JOIN prepaid_grants g ON g.receipt=r.receipt WHERE r.id=?",
-                (rid,),
-            ).fetchone()
-            if (
-                not row
-                or row["state"] != "reserved"
-                or row["revoked"]
-                or row["ends"] <= self.clock()
-            ):
-                raise Denied("This reservation is no longer valid.")
+            rows = []
+            for rid in rids:
+                row = db.execute(
+                    "SELECT r.*,g.revoked,g.ends FROM prepaid_requests r "
+                    "JOIN prepaid_grants g ON g.receipt=r.receipt WHERE r.id=?",
+                    (rid,),
+                ).fetchone()
+                if (
+                    not row
+                    or row["state"] != "reserved"
+                    or row["revoked"]
+                    or row["ends"] <= self.clock()
+                ):
+                    raise Denied("This reservation is no longer valid.")
+                rows.append(row)
+            if len({(row["guild"], row["user_id"]) for row in rows}) != 1:
+                raise Denied("Usage reservations belong to different members.")
             if db.execute("SELECT 1 FROM prepaid_state WHERE key='locked'").fetchone():
                 raise Denied("Paid features are paused.")
-            self._active(db, row["guild"])
-            db.execute("UPDATE prepaid_requests SET state='dispatched' WHERE id=?", (rid,))
+            self._active(db, rows[0]["guild"])
+            db.executemany(
+                "UPDATE prepaid_requests SET state='dispatched' WHERE id=?",
+                [(rid,) for rid in rids],
+            )
 
     def cancel(self, rid: str):
         with self.db() as db:
@@ -408,6 +514,58 @@ class Ledger:
             )
         if breach:
             raise Denied("Paid features paused: provider usage exceeded its approved bound.")
+
+    def settle_choice(
+        self, chat_rid: str, search_rid: str, actual_micros: int, *, used_search: bool
+    ) -> None:
+        """Settle the verified branch and release the other paired allowance."""
+        integer(actual_micros)
+        if type(used_search) is not bool or chat_rid == search_rid:
+            raise Denied("Invalid usage choice.")
+        breach = False
+        with self.db() as db:
+            rows = []
+            for rid in (chat_rid, search_rid):
+                row = db.execute("SELECT * FROM prepaid_requests WHERE id=?", (rid,)).fetchone()
+                if row is None:
+                    raise Denied("Unknown usage reservation.")
+                rows.append(row)
+            chat, search = rows
+            chosen, unused = (search, chat) if used_search else (chat, search)
+            if (
+                chat["feature"] != "chat"
+                or search["feature"] != "search"
+                or (chat["guild"], chat["user_id"]) != (search["guild"], search["user_id"])
+            ):
+                breach = True
+            elif (
+                chosen["state"] == "settled"
+                and chosen["actual"] == actual_micros
+                and unused["state"] == "cancelled"
+                and unused["actual"] == 0
+            ):
+                return
+            elif (
+                chosen["state"] != "dispatched"
+                or unused["state"] != "dispatched"
+                or actual_micros > chosen["reserved"]
+            ):
+                breach = True
+            else:
+                db.execute(
+                    "UPDATE prepaid_requests SET actual=?,state='settled' WHERE id=?",
+                    (actual_micros, chosen["id"]),
+                )
+                db.execute(
+                    "UPDATE prepaid_requests SET actual=0,state='cancelled' WHERE id=?",
+                    (unused["id"],),
+                )
+            if breach:
+                db.execute(
+                    "INSERT OR REPLACE INTO prepaid_state VALUES('locked','usage_choice_mismatch')"
+                )
+        if breach:
+            raise Denied("Paid features paused: provider usage choice is inconsistent.")
 
     def lock(self, reason="usage_unverifiable"):
         with self.db() as db:
@@ -505,4 +663,8 @@ class Ledger:
                 "SELECT payment FROM prepaid_grants WHERE revoked=0 AND starts<=? AND ends>?",
                 (now, now),
             ).fetchall()
-            return sum(json.loads(r[0])["gross_micros"] // 10 for r in rows)
+            return sum(
+                basis["gross_micros"] // 10
+                for row in rows
+                if (basis := json.loads(row[0])).get("source") == "verified_payment"
+            )

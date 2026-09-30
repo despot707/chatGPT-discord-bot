@@ -27,11 +27,14 @@ const allHtml = html.join('\n');
 for (const route of ['/plans/', '/privacy/', '/terms/', '/support/']) {
   check((allHtml.match(new RegExp(`<a href="${route.replaceAll('/', '\\/')}"`, 'g')) ?? []).length >= 2, `${route} is linked internally`);
 }
-check(!/<a[^>]*>[^<]*(buy now|subscribe now|checkout|purchase)[^<]*<\/a>/i.test(allHtml), 'no purchase or checkout call to action is present');
+const configuredSaleStatus = JSON.parse(await read(path.join(site, 'site.config.json'))).saleStatus;
+const saleStatus = process.env.NODE_ENV === 'test' ? (process.env.SITE_SALE_STATUS || configuredSaleStatus) : configuredSaleStatus;
+check(saleStatus === 'live' ? (allHtml.match(/class="button button-primary plan-purchase"/g) ?? []).length === 3 : !/<a[^>]*>[^<]*(buy now|subscribe now|checkout|purchase)[^<]*<\/a>/i.test(allHtml), saleStatus === 'live' ? 'all live plan cards have purchase links' : 'preview has no purchase or checkout call to action');
 check(!/<script\b|google-analytics|googletagmanager|facebook\.net|segment\.com|hotjar/i.test(allHtml), 'pages have no JavaScript, analytics, or tracker');
 check(!/href="#"/.test(allHtml), 'no dead placeholder link is present');
-check(/Public installation is being prepared\./.test(allHtml) && /<a class="button button-primary" href="\/support\/">Get help<\/a>/.test(allHtml), 'unverified installation routes people to support with a clear notice');
+check(saleStatus === 'live' || JSON.parse(await read(path.join(site, 'site.config.json'))).inviteUrl ? /Add to a server ↗/.test(allHtml) : /Public installation is being prepared\./.test(allHtml), 'installation link matches the configured availability');
 check(/illustrative example/i.test(allHtml) && /not a real conversation or testimonial/i.test(allHtml), 'sample conversation is labeled illustrative');
+check(!/Steam libraries/.test(allHtml), 'site does not promise Steam library integration');
 check(allHtml.includes('Export settings') && allHtml.includes('Delete my data') && allHtml.includes('/profile'), 'support describes the private profile data controls');
 check(allHtml.includes('Cloudflare may process technical request metadata') && allHtml.includes('separate from the Discord Service policy'), 'website hosting disclosure is distinct');
 
@@ -62,11 +65,23 @@ check(privacyPage.includes(`href="${config.supportUrl}"`) && termsPage.includes(
 
 const pricing = await read(path.join(repo, config.pricing.source));
 const plansPage = await read(path.join(out, 'plans/index.html'));
-for (const value of ['$1.99', '$4.99', '$9.99', '400', '500', '1000', '50', '100', '10', '20', '3']) check(plansPage.includes(value), `plan preview includes proposed AI price/allowance ${value}`);
-for (const value of ['ongoing free tier', 'no free AI credit', 'Basic begins paid AI access', '8,000 input tokens', '500 total output tokens', '2,000 total output tokens', 'including hidden reasoning', 'not available for purchase yet', 'no purchase or charge can occur', 'no overage charges or automatic refills']) check(plansPage.toLowerCase().includes(value.toLowerCase()), `plan page explains ${value}`);
+for (const value of ['$1.99', '$4.99', '$9.99', '400', '500', '1000', '50', '100', '10', '20', '3']) check(plansPage.includes(value), `plan page includes price/allowance ${value}`);
 check(!plansPage.includes('Server operations') && !plansPage.includes('Saved data') && !plansPage.includes('Optional add-ons') && !plansPage.includes('Extra chat') && !plansPage.includes('Storage boost'), 'public plans omit core counts and unsupported add-on offers');
-check(pricing.includes('AI purchases are not enabled'), 'source plan status confirms AI purchases are disabled');
-check(plansPage.toLowerCase().includes('not available for purchase yet') && plansPage.toLowerCase().includes('no purchase or charge can occur'), 'plan page clearly keeps AI sales disabled');
+check(pricing.includes('## Included allowances'), 'published allowances are derived from the reviewed plan table');
+if (saleStatus === 'live') {
+  for (const [sku, product] of Object.entries({ '1554920142532513832': 'Basic', '1554920641088593990': 'Plus', '1554920977488551936': 'Premium' })) {
+    check(plansPage.includes(`https://discord.com/application-directory/1365724363722068120/store/${sku}`), `${product} links to its reviewed Discord SKU`);
+  }
+  for (const phrase of ['shared across this server', 'does not roll over', 'no overage charges', 'Cancel any time in Discord subscription settings', 'free trial', 'image edits', 'image hosting', 'Daily availability limits also apply; temporarily unavailable features resume as capacity resets']) check(plansPage.toLowerCase().includes(phrase.toLowerCase()), `live plans disclose ${phrase}`);
+  const supportPage = await read(path.join(out, 'support/index.html'));
+  check(supportPage.includes('Manage your AI subscription') && supportPage.includes('Subscriptions in Discord'), 'live support explains how to manage Discord subscriptions');
+  check(!/not available for purchase yet|no purchase or charge can occur/i.test(plansPage), 'live plans do not carry inactive-checkout messaging');
+} else {
+  check(plansPage.toLowerCase().includes('no free ai credit'), 'preview explains there are no free AI credits');
+  for (const value of ['8,000 input tokens', '500 total output tokens', '2,000 total output tokens', 'including hidden reasoning']) check(plansPage.toLowerCase().includes(value.toLowerCase()), `preview explains ${value}`);
+  for (const value of ['not available for purchase yet', 'no purchase or charge can occur']) check(plansPage.toLowerCase().includes(value), `preview clearly says ${value}`);
+  check(!plansPage.includes('application-directory/'), 'preview has no active SKU checkout links');
+}
 
 const routeForHref = (href) => {
   const clean = href.split(/[?#]/, 1)[0];

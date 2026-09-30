@@ -1,10 +1,11 @@
+from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from src.bot import DiscordClient
 from src.config import BotConfig
 from src.prepaid import Denied
-from src.prepaid_client import plan_embed
+from src.prepaid_client import PLAN_SKUS, active_plan_skus, plan_embed, plan_view
 from src.prepaid_runtime import SCOPE, PaidManager
 
 from tests.test_bot import Manager, interaction
@@ -17,8 +18,58 @@ def test_plan_ui_is_finite_and_has_no_checkout():
     assert any("400 chat attempts" in f["value"] for f in data["fields"])
     assert len(data["fields"]) == 4
     assert "Profiles" in data["fields"][0]["value"]
+    assert "no trial or free ai credits" in data["fields"][0]["value"].lower()
+    assert "daily availability limits also apply" in data["footer"]["text"].lower()
     assert all("server operations" not in f["value"] for f in data["fields"])
     assert sum(len(f["value"]) for f in data["fields"]) < 5000
+    assert plan_view(None) is None
+
+
+def test_native_checkout_requires_all_live_gates_and_exact_sku_map(monkeypatch):
+    from src.config import BotConfig
+
+    config = BotConfig(
+        discord_bot_token="x",
+        hard_budget_enabled=True,
+        discord_purchase_mode="enforce",
+        discord_application_id=1365724363722068120,
+        discord_sku_map=",".join(f"{sku}:{product}" for product, sku in PLAN_SKUS.items()),
+    )
+    monkeypatch.setenv("PREPAID_MODE", "enforce")
+    monkeypatch.setenv("DISCORD_PURCHASE_MODE", "enforce")
+    monkeypatch.setenv("DISCORD_FUNDING_MODE", "entitlement")
+    skus = active_plan_skus(config)
+    assert skus == {sku: product for product, sku in PLAN_SKUS.items()}
+    assert active_plan_skus(replace(config, ai_access_mode="disabled")) is None
+    assert active_plan_skus(replace(config, hard_budget_enabled=False)) is None
+    view = plan_view(skus)
+    assert view is not None
+    assert {button.sku_id for button in view.children} == set(PLAN_SKUS.values())
+    for button in view.children:
+        component = button.to_component_dict()
+        assert component["style"] == 6
+        assert "sku_id" in component
+        assert "label" not in component and "custom_id" not in component
+    active = plan_embed(checkout_available=True).to_dict()
+    assert "cancel through discord" in active["description"].lower()
+    assert any("400 chat attempts" in f["value"] for f in active["fields"])
+
+    monkeypatch.setenv("PREPAID_MODE", "preview")
+    assert active_plan_skus(config) is None
+    monkeypatch.setenv("PREPAID_MODE", "enforce")
+    monkeypatch.setenv("DISCORD_FUNDING_MODE", "settlement")
+    assert active_plan_skus(config) is None
+    assert plan_view(active_plan_skus(config)) is None
+
+    bad_map = BotConfig(
+        discord_bot_token="x",
+        hard_budget_enabled=True,
+        discord_purchase_mode="enforce",
+        discord_application_id=1365724363722068120,
+        discord_sku_map="999:basic",
+    )
+    monkeypatch.setenv("DISCORD_FUNDING_MODE", "entitlement")
+    assert active_plan_skus(bad_map) is None
 
 
 @pytest.mark.asyncio
@@ -31,6 +82,7 @@ async def test_preview_does_not_replace_current_manager(monkeypatch):
     target = interaction()
     await client.tree.get_command("plans").callback(target)
     assert target.response.send_message.call_args.kwargs["ephemeral"] is True
+    assert "view" not in target.response.send_message.call_args.kwargs
 
 
 @pytest.mark.asyncio
