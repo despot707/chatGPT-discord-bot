@@ -1,42 +1,25 @@
 FROM python:3.12-slim
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Create app directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 10001 botuser \
+    && mkdir -p /app/data \
+    && chown botuser:botuser /app/data
 
-# Create non-root user
-RUN useradd -m -r -u 1001 botuser && \
-    mkdir -p /app/.cache && \
-    chown -R botuser:botuser /app
+COPY constraints.txt requirements.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt
 
-# Copy requirements first for better caching
-COPY --chown=botuser:botuser requirements.txt .
+COPY --chown=botuser:botuser main.py system_prompt.txt LICENSE ./
+COPY --chown=botuser:botuser src/ ./src/
+COPY --chown=botuser:botuser utils/ ./utils/
+COPY --chown=botuser:botuser assets/ ./assets/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY --chown=botuser:botuser . .
-
-# Create system prompt file if it doesn't exist
-RUN touch system_prompt.txt && chown botuser:botuser system_prompt.txt
-
-# Switch to non-root user
 USER botuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import discord; print('Bot container healthy')" || exit 1
-
-# Run the bot
 CMD ["python", "main.py"]

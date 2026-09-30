@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "utils", "tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "main.py", "utils"]
+check_untyped_defs = true
+ignore_missing_imports = true
+pretty = true
+warn_redundant_casts = true
+warn_unused_ignores = true
