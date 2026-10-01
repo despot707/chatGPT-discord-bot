@@ -128,13 +128,11 @@ or an admission cutoff.
 
 ## Integrated interface and shutdown checks
 
-The integrated release updates customer copy that previously described personal
-daily availability or the $10 shared commercial ceiling, including:
-
-- `src/prepaid_client.py` plan footer
-- `docs/prepaid-plans.md` owner envelope and shared-budget section
-- `docs/commercial-launch.md` launch checklist and daily availability wording
-- Customer-facing site source using the same availability wording
+The integrated release updates the plan footer, plan and purchase documentation,
+launch continuity note, and customer-facing site copy. They describe finite
+allowances by authenticated Discord billing period and make clear that the
+advisory $100 planning baseline is not a paid-service cutoff. The original
+personal daily limits and shared $10 ceiling remain migration metadata only.
 
 The integrated release also repairs `PaidWeb.close()` so the request-scoped
 `WebService` can shut down without an absent-method error. The real Linux
