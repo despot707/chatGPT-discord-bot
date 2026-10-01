@@ -134,7 +134,10 @@ async def test_budget_command_is_private_and_never_calls_ai():
     manager = SimpleNamespace(
         budget=SimpleNamespace(snapshot=lambda: _snapshot()), complete=AsyncMock()
     )
-    client = DiscordClient(BotConfig(discord_bot_token="test"), provider_manager=manager)
+    client = DiscordClient(
+        BotConfig(discord_bot_token="test", bot_admin_ids=frozenset({1, 3})),
+        provider_manager=manager,
+    )
     client._register_commands()
     target = SimpleNamespace(
         user=SimpleNamespace(id=1),
@@ -175,7 +178,10 @@ async def test_status_does_not_promote_budget_report():
     manager = SimpleNamespace(
         get_provider=lambda provider: SimpleNamespace(default_model="test-model")
     )
-    client = DiscordClient(BotConfig(discord_bot_token="test"), provider_manager=manager)
+    client = DiscordClient(
+        BotConfig(discord_bot_token="test", bot_admin_ids=frozenset({1, 3})),
+        provider_manager=manager,
+    )
     client._register_commands()
     target = SimpleNamespace(
         guild=SimpleNamespace(id=1),

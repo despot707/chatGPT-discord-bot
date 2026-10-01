@@ -167,18 +167,13 @@ class ProfilePanel(ui.LayoutView):
                     ),
                     ui.ActionRow(
                         _Button("Privacy & data", self.open_privacy, emoji="🔒"),
-                        _Button(
-                            "Tell me what to save",
-                            self.open_remember,
-                            style=discord.ButtonStyle.primary,
-                        ),
                     ),
                 ]
             )
         elif screen == "games":
             children.append(
                 ui.TextDisplay(
-                    "### Your games\nSelect a catalog game. For suggestions as you type, use /addgame."
+                    "### Your games\nSelect a catalog game. Use Search games to choose a title."
                 )
             )
             if profile["games"]:
@@ -238,8 +233,7 @@ class ProfilePanel(ui.LayoutView):
                             "**No extra login.** Discord identifies your account. These forms never request passwords or account tokens."
                         ),
                         ui.TextDisplay(
-                            "Private means hidden from other server members, not from Discord or the bot operator. Forms save directly to the bot database. "
-                            "“Tell me what to save” sends your request to the configured AI provider; nothing is saved until you confirm. "
+                            "Private means hidden from other server members, not from Discord or the bot operator. Forms save directly to the bot database and never call AI. "
                             "Saved settings can help AI replies. Only shared fields are supplied for public replies."
                         ),
                         ui.TextDisplay(
@@ -425,7 +419,7 @@ class ProfilePanel(ui.LayoutView):
         await i.response.send_modal(PreferencesModal(self))
 
     async def open_remember(self, i):
-        await i.response.send_modal(RememberModal(self))
+        await private_notice(i, "Use the free profile forms to choose what to save.")
 
     async def remove_game(self, i):
         await self.switch(
@@ -535,7 +529,7 @@ class GameSearchModal(_OwnedModal):
                 max_length=100,
                 required=False,
             ),
-            "Search text is not saved. Live suggestions are also available with /addgame.",
+            "Search text is not saved. Choose a matching title before saving.",
         )
 
     async def on_submit(self, interaction):

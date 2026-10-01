@@ -221,7 +221,7 @@ def register_gaming_commands(client) -> None:
                 return
             await _reply(
                 interaction,
-                f"Linked Steam profile {_clean_name(profile_data.display_name)}. Steam profile ownership is not verified. Linking lets this server compare your game library with its channel party. Use /steam unlink to remove it.",
+                f"Linked Steam profile {_clean_name(profile_data.display_name)}. Steam profile ownership is not verified. Linking lets this server compare your game library with its channel party. Use /games → Steam → Unlink Steam to remove it.",
                 ephemeral=True,
             )
         except Exception as exc:
@@ -274,7 +274,7 @@ def register_gaming_commands(client) -> None:
             message = (
                 f"Your Steam profile is linked as {_clean_name(link.display_name)}."
                 if link
-                else "You have not linked a Steam profile. Use /steam link to link one."
+                else "You have not linked a Steam profile. Use /games → Steam → Link Steam."
             )
             await _reply(interaction, message, ephemeral=True)
         except Exception as exc:
@@ -335,7 +335,7 @@ def register_gaming_commands(client) -> None:
             await _defer(interaction, ephemeral=False)
             players = await _db_call(_store(client).party, scope[0], scope[1])
             if not players:
-                message = "This channel's party is empty. Use /party join to join."
+                message = "This channel's party is empty. Use /games → Party & teams → Join party."
             else:
                 lines = ["**Current channel party**"]
                 lines.extend(
@@ -399,7 +399,9 @@ def register_gaming_commands(client) -> None:
         try:
             players = await _db_call(_store(client).party, scope[0], scope[1])
             if not 2 <= len(players) <= 20:
-                raise BotRequestError("/games requires 2 to 20 people in this channel's party.")
+                raise BotRequestError(
+                    "Game matching requires 2 to 20 people in this channel's party."
+                )
             links = await asyncio.gather(
                 *(
                     _db_call(_store(client).get_steam, scope[0], player.user_id)
@@ -435,7 +437,7 @@ def register_gaming_commands(client) -> None:
                 player.user_id for player in players
             ] or [link.steam_id if link else None for link in current_links] != steam_ids:
                 raise BotRequestError(
-                    "The party or a Steam link changed during matching. Run /games again."
+                    "The party or a Steam link changed during matching. Open /games → Party & teams and try again."
                 )
             if not suggestions:
                 reason = (
@@ -443,7 +445,7 @@ def register_gaming_commands(client) -> None:
                     if multiplayer_only
                     else "The group has no matching games in its Steam libraries."
                 )
-                message = f"{reason} Try /games together with multiplayer_only disabled to compare all shared titles."
+                message = f"{reason} Choose Find shared Steam games in /games → Party & teams and set Multiplayer only to no."
             else:
                 lines = ["**Games to play together**"]
                 for suggestion in suggestions[:limit]:
@@ -496,7 +498,7 @@ def register_gaming_commands(client) -> None:
             players = await _db_call(_store(client).party, scope[0], scope[1])
             if len(players) < team_count or len(players) > 20:
                 raise BotRequestError(
-                    "/teams requires at least one person per team and no more than 20 people."
+                    "Making teams requires at least one person per team and no more than 20 people."
                 )
             teams_result = make_teams(players, team_count, balanced=balanced)
             lines = ["**Balanced teams**" if balanced else "**Teams**"]

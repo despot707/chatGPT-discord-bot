@@ -474,7 +474,7 @@ class Ledger:
             "chat": "Chat",
         }[feature]
         raise Denied(
-            f"{label} allowance is exhausted or not included. See /usage and /plans. No automatic charge was made."
+            f"{label} allowance is exhausted or not included. See Plan & usage in /settings, or /plans. No automatic charge was made."
         )
 
     def dispatch(self, rid: str):

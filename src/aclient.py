@@ -23,6 +23,12 @@ from src.ai_access import ai_disabled
 from src.budget import BudgetError
 from src.chat_store import ChatStore
 from src.config import BotConfig
+from src.customer_privacy import (
+    CUSTOMER_PRIVACY_INSTRUCTION,
+    INTERNAL_DETAILS_REFUSAL,
+    asks_for_internal_details,
+    sanitize_customer_response,
+)
 from src.memory_store import MemoryStore
 from src.message_context import serialize_message
 from src.prepaid import Denied
@@ -41,6 +47,19 @@ _BUDGET_ERROR_TERMS = (
     "allowance",
     "billing",
     "charge",
+    "provider",
+    "model",
+    "api key",
+    "api_key",
+    "token",
+    "secret",
+    "credential",
+    "system prompt",
+    "traceback",
+    "database",
+    "sqlite",
+    "config",
+    "authorization",
 )
 
 
@@ -51,13 +70,35 @@ def public_error_message(error: BaseException) -> str:
 
         if enforcing():
             return PUBLIC_FAILURE
-        return str(error)
+        message = str(error)
+        if any(
+            term in message.casefold()
+            for term in (
+                "provider",
+                "model",
+                "api key",
+                "api_key",
+                "token",
+                "secret",
+                "credential",
+                "system prompt",
+                "traceback",
+                "database",
+                "sqlite",
+                "config",
+                "authorization",
+            )
+        ):
+            return PUBLIC_FAILURE
+        return sanitize_customer_response(message)
     if isinstance(error, (ProviderError, BudgetError)):
+        return PUBLIC_FAILURE
+    if not isinstance(error, (BotRequestError, WebError, ValueError)):
         return PUBLIC_FAILURE
     message = str(error)
     if any(term in message.casefold() for term in _BUDGET_ERROR_TERMS):
         return PUBLIC_FAILURE
-    return message
+    return sanitize_customer_response(message)
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +126,9 @@ class UserChannelSettings:
     model: str
     persona: str = "standard"
     private: bool = True
+    more_effort: bool = False
+    images_enabled: bool = True
+    context_messages: int | None = None
     last_used: float = field(default_factory=time.monotonic)
 
 
@@ -100,18 +144,9 @@ class _BotCommandTree(app_commands.CommandTree):
         self.bot_client = client
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.bot_client.allowed(self.bot_client._scope(interaction)):
-            return True
-        message = "This bot is not enabled in this server or channel."
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
-            )
-        else:
-            await interaction.response.send_message(
-                message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
-            )
-        return False
+        command = getattr(interaction, "command", None)
+        root = getattr(command, "root_parent", None) or command
+        return await self.bot_client.customer_action_allowed(interaction, getattr(root, "name", ""))
 
 
 class DiscordClient(discord.Client):
@@ -228,6 +263,10 @@ class DiscordClient(discord.Client):
         if self._registered:
             return
         self._register_commands()
+        from src.customer_controls import configure_customer_commands
+
+        configure_customer_commands(self)
+        # Global bulk overwrite also retires the old provider/settings/tool commands.
         commands = await self.tree.sync()
         self._registered = True
         logger.info("Registered %d Discord application commands", len(commands))
@@ -301,6 +340,9 @@ class DiscordClient(discord.Client):
                 ProviderType(self.config.default_provider), self.config.default_model, private=True
             )
         value = self.settings[scope]
+        # Provider/model selection is operator-owned, including old in-memory sessions.
+        value.provider = ProviderType(self.config.default_provider)
+        value.model = self.config.default_model
         value.last_used = time.monotonic()
         return value
 
@@ -309,6 +351,28 @@ class DiscordClient(discord.Client):
         return (
             not self.config.allowed_guild_ids or guild_id in self.config.allowed_guild_ids
         ) and (not self.config.allowed_channel_ids or channel_id in self.config.allowed_channel_ids)
+
+    async def customer_action_allowed(self, interaction, name: str) -> bool:
+        """Shared access check for slash commands and private component actions."""
+        if self.allowed(self._scope(interaction)):
+            return True
+        from src.profile_ui import private_notice
+
+        await private_notice(interaction, "This bot is not enabled in this server or channel.")
+        return False
+
+    async def feature_availability(self, scope, feature: str) -> str | None:
+        """Non-commercial clients retain their configured capabilities."""
+        return None
+
+    async def customer_feature_allowed(self, interaction, feature: str) -> bool:
+        from src.profile_ui import private_notice
+
+        notice = await self.feature_availability(self._scope(interaction), feature)
+        if notice:
+            await private_notice(interaction, notice)
+            return False
+        return True
 
     def is_admin(self, user_id: int, interaction=None) -> bool:
         if user_id in self.config.bot_admin_ids:
@@ -413,17 +477,18 @@ class DiscordClient(discord.Client):
             raise BotRequestError(
                 f"Message is too long (maximum {self.config.max_input_chars} characters)."
             )
+        if asks_for_internal_details(text):
+            return INTERNAL_DETAILS_REFUSAL
         settings = self.get_settings(scope)
         use_private = settings.private if private is None else private
         key = ConversationKey(scope[0], scope[1], scope[2] if use_private else 0, use_private)
         conv = self._conversation(key)
         async with self._request_slot(scope, conv):
             # Freeze all mutable settings before the first provider await.
-            provider_type, configured_model, persona = settings_snapshot or (
-                settings.provider,
-                settings.model,
-                settings.persona,
-            )
+            provider_type = ProviderType(self.config.default_provider)
+            configured_model = self.config.default_model
+            # Retain the frozen style, never a retired customer routing override.
+            persona = settings_snapshot[2] if settings_snapshot else settings.persona
             model = configured_model if configured_model != "auto" else None
             persona_prompt = self._persona_prompt(persona, scope[2])
             messages = [
@@ -433,6 +498,13 @@ class DiscordClient(discord.Client):
                     + f"\n\nCurrent date (UTC): {datetime.now(timezone.utc).date().isoformat()}"
                     + "\n\n"
                     + persona_prompt
+                    + "\n\n"
+                    + CUSTOMER_PRIVACY_INSTRUCTION
+                    + "\nYou can answer questions using supplied context and available web/image inputs. "
+                    "You cannot moderate members, change Discord permissions, join voice, run commands, "
+                    "or save profile changes through this conversation. Use /profile for free manual settings. "
+                    "Image creation is handled separately before a chat request; never claim to have "
+                    "created, edited, or sent an image without a confirmed image result."
                     + "\nFor short follow-up questions, resolve references such as 'that' or 'the difference' "
                     "from the supplied recent conversation and reply target. Use both member messages and bot answers. "
                     "Ask for clarification only when the relevant context is missing or genuinely ambiguous; do not invent it.",
@@ -478,7 +550,12 @@ class DiscordClient(discord.Client):
                 require_web_search=require_web_search,
                 reasoning_requested=reasoning_requested,
             )
-            reply = result.text
+            reply = sanitize_customer_response(result.text)
+            # Block direct reproduction of a substantial configured private prompt.
+            # Heuristic guards supplement, rather than replace, keeping secrets out of context.
+            hidden_prompt = " ".join(self.config.system_prompt.split())
+            if len(hidden_prompt) >= 80 and hidden_prompt in " ".join(reply.split()):
+                reply = INTERNAL_DETAILS_REFUSAL
             conv.messages.extend(
                 [
                     {"role": "user", "content": stored_text},
@@ -502,9 +579,6 @@ class DiscordClient(discord.Client):
                     self._chat_store_unavailable = True
                     self._chat_store = None
                     logger.warning("Persistent chat history could not be saved")
-            if len(result.attempted) > 1:
-                used = result.provider.value
-                return f"{reply}\n\n_(Answered by {used} after another provider was unavailable.)_"
             return reply
 
     def reset(self, scope: tuple[int, int, int], *, channel: bool = False) -> bool:
@@ -564,6 +638,8 @@ class DiscordClient(discord.Client):
             raise BotRequestError(PUBLIC_FAILURE)
         if not self.config.enable_image_generation:
             raise BotRequestError(PUBLIC_FAILURE)
+        if asks_for_internal_details(prompt):
+            raise BotRequestError(INTERNAL_DETAILS_REFUSAL)
         if len(prompt) > self.config.max_input_chars:
             raise BotRequestError(
                 f"Prompt is too long (maximum {self.config.max_input_chars} characters)."
@@ -575,10 +651,8 @@ class DiscordClient(discord.Client):
             )
         )
         async with self._request_slot(scope, conv):
-            provider_type, configured_model = settings_snapshot or (
-                settings.provider,
-                settings.model,
-            )
+            provider_type = ProviderType(self.config.default_provider)
+            configured_model = self.config.default_model
             provider = self.provider_manager.get_provider(provider_type)
             if not provider.supports_image_generation():
                 raise BotRequestError(PUBLIC_FAILURE)
@@ -615,22 +689,30 @@ class DiscordClient(discord.Client):
                     message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
                 )
 
-        @self.tree.command(name="chat", description="Have a private or public chat with AI")
+        @self.tree.command(
+            name="chat", description="Chat with AI; add more effort, web search or an image"
+        )
+        @app_commands.describe(
+            message="What would you like help with?",
+            image="Optional image to discuss",
+            web_search="Look up current information (uses your plan's search allowance)",
+            more_effort="Think more deeply (uses your plan's more-effort allowance)",
+        )
         async def chat(
             interaction: discord.Interaction,
             message: str,
             image: discord.Attachment | None = None,
-            use_web: bool = False,
-            reason: bool = False,
-            context_messages: app_commands.Range[int, 0, 20] | None = None,
+            web_search: bool = False,
+            more_effort: bool | None = None,
         ):
+            settings = self.get_settings(self._scope(interaction))
             await self._chat_interaction(
                 interaction,
                 message,
                 image=image,
-                use_web=use_web,
-                reasoning_requested=reason,
-                context_messages=context_messages,
+                use_web=web_search,
+                reasoning_requested=settings.more_effort if more_effort is None else more_effort,
+                context_messages=settings.context_messages,
             )
 
         @self.tree.command(name="search", description="Search the web and summarize sources")
@@ -690,73 +772,6 @@ class DiscordClient(discord.Client):
                 ephemeral=True,
             )
 
-        @self.tree.command(name="provider", description="Choose your AI provider")
-        async def provider(
-            interaction: discord.Interaction,
-            provider_name: str | None = None,
-            model: str | None = None,
-        ):
-            scope = self._scope(interaction)
-            if self._has_in_flight(scope):
-                await interaction.response.send_message(
-                    "A response is in progress; try again afterward.", ephemeral=True
-                )
-                return
-            try:
-                if provider_name is None:
-                    names = ", ".join(
-                        p.value for p in self.provider_manager.get_available_providers()
-                    )
-                    await interaction.response.send_message(
-                        f"Available providers: {names}. Choose one using the provider option.",
-                        ephemeral=True,
-                    )
-                    return
-                provider_type = ProviderType(provider_name.lower())
-                selected = self.provider_manager.get_provider(provider_type)
-                model = model or "auto"
-                if model != "auto" and model not in {
-                    m.name
-                    for m in selected.get_available_models()
-                    if not m.supports_image_generation
-                }:
-                    raise ValueError("Unknown model")
-                self.get_settings(scope).provider = provider_type
-                self.get_settings(scope).model = model
-                await interaction.response.send_message(
-                    f"Provider set to {provider_type.value} ({model}).", ephemeral=True
-                )
-            except Exception:
-                await interaction.response.send_message(
-                    "That provider or model is unavailable.", ephemeral=True
-                )
-
-        @provider.autocomplete("provider_name")
-        async def provider_autocomplete(interaction: discord.Interaction, current: str):
-            values = [
-                p.value
-                for p in self.provider_manager.get_available_providers()
-                if current.lower() in p.value
-            ]
-            return [app_commands.Choice(name=value, value=value) for value in values[:25]]
-
-        @provider.autocomplete("model")
-        async def model_autocomplete(interaction: discord.Interaction, current: str):
-            scope = self._scope(interaction)
-            settings = self.get_settings(scope)
-            provider_name = getattr(interaction.namespace, "provider_name", None)
-            try:
-                kind = ProviderType(provider_name or settings.provider.value)
-                models = self.provider_manager.get_provider_models(kind)
-            except ValueError:
-                models = []
-            values = ["auto"] + [
-                m.name
-                for m in models
-                if not m.supports_image_generation and current.lower() in m.name.lower()
-            ]
-            return [app_commands.Choice(name=value[:100], value=value) for value in values[:25]]
-
         @self.tree.command(name="switchpersona", description="Switch your assistant persona")
         async def switchpersona(interaction: discord.Interaction, persona: str):
             scope = self._scope(interaction)
@@ -810,6 +825,8 @@ class DiscordClient(discord.Client):
                 or not self.config.enable_image_generation
             ):
                 await interaction.response.send_message(PUBLIC_FAILURE, ephemeral=True)
+                return
+            if not await self.customer_feature_allowed(interaction, "images"):
                 return
             prompt = prompt.replace("\x00", "").strip()
             if not prompt:
@@ -873,7 +890,7 @@ class DiscordClient(discord.Client):
         async def budget_status(interaction: discord.Interaction):
             from src.budget_view import format_budget
 
-            if not self.is_admin(interaction.user.id, interaction):
+            if interaction.user.id not in self.config.bot_admin_ids:
                 await interaction.response.send_message(
                     PUBLIC_FAILURE, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
                 )
@@ -893,6 +910,9 @@ class DiscordClient(discord.Client):
 
         @self.tree.command(name="status", description="Show your current bot settings")
         async def status(interaction: discord.Interaction):
+            if interaction.user.id not in self.config.bot_admin_ids:
+                await interaction.response.send_message(PUBLIC_FAILURE, ephemeral=True)
+                return
             s = self.get_settings(self._scope(interaction))
             if self.config.ai_access_mode == "disabled":
                 model = "disabled"
@@ -920,7 +940,7 @@ class DiscordClient(discord.Client):
         @self.tree.command(name="help", description="Show bot commands")
         async def help_command(interaction: discord.Interaction):
             await interaction.response.send_message(
-                "Mention the bot for shared group chat; reply to a bot message to continue. /chat starts a private chat by default and can use an image, web search, or recent channel context. /search finds sourced web results; /browse summarizes one public page. /reset clears your private saved history; administrators can set channel:true to clear shared channel history. /private toggles private replies. Use /provider, /switchpersona, and /status for chat settings. /steam link, /steam unlink, /steam status, /party join, /party leave, /party show, /party clear, /games together, and /teams make manage gaming features. Steam profile ownership is not verified. Reply-all and party clearing are administrator controlled.",
+                "@mention me or reply to my message for AI help. Ask me to think harder, search the web, or make an image. AI requests use your server’s allowance. /settings, /games, /profile and /plans are free.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -1010,6 +1030,12 @@ class DiscordClient(discord.Client):
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+            return
+        if reasoning_requested and not await self.customer_feature_allowed(
+            interaction, "reasoning"
+        ):
+            return
+        if use_web and not await self.customer_feature_allowed(interaction, "search"):
             return
         await interaction.response.defer(ephemeral=private)
         try:
@@ -1226,6 +1252,8 @@ class DiscordClient(discord.Client):
             return
         private = settings.private
         snapshot = (settings.provider, settings.model, settings.persona)
+        if kind == "search" and not await self.customer_feature_allowed(interaction, "search"):
+            return
         await interaction.response.defer(ephemeral=private)
         sources: list[WebSource] = []
 
@@ -1336,7 +1364,9 @@ class DiscordClient(discord.Client):
     async def on_ready(self) -> None:
         if self.user:
             await self.change_presence(
-                activity=discord.Activity(type=discord.ActivityType.listening, name="/chat | /help")
+                activity=discord.Activity(
+                    type=discord.ActivityType.listening, name="@mention me | /settings"
+                )
             )
             logger.info(
                 "Discord ready as bot ID %s in %d guilds",
@@ -1417,8 +1447,11 @@ class DiscordClient(discord.Client):
             not self.config.interaction_channel_ids
             or channel_id in self.config.interaction_channel_ids
         )
+        from src.prepaid_runtime import enforcing
+
         reply_all = (
-            self.config.enable_message_content
+            not enforcing()
+            and self.config.enable_message_content
             and channel_id in self.replyall_enabled
             and channel_id in self.config.replyall_channel_ids
         )
@@ -1487,11 +1520,33 @@ class DiscordClient(discord.Client):
             )
             return
 
+        if asks_for_internal_details(content):
+            await message.channel.send(
+                INTERNAL_DETAILS_REFUSAL, allowed_mentions=discord.AllowedMentions.none()
+            )
+            return
+        try:
+            settings = self.get_settings(scope)
+        except BotRequestError as exc:
+            await message.channel.send(
+                public_error_message(exc), allowed_mentions=discord.AllowedMentions.none()
+            )
+            return
         if intent.draw_prompt:
+            if not settings.images_enabled:
+                await message.channel.send(
+                    "Images are off in your settings. Turn them on in /settings.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
             if not self.config.enable_image_generation:
                 await message.channel.send(
                     PUBLIC_FAILURE, allowed_mentions=discord.AllowedMentions.none()
                 )
+                return
+            notice = await self.feature_availability(scope, "images")
+            if notice:
+                await message.channel.send(notice, allowed_mentions=discord.AllowedMentions.none())
                 return
             try:
                 settings = self.get_settings(scope)
@@ -1525,8 +1580,35 @@ class DiscordClient(discord.Client):
                     PUBLIC_FAILURE, allowed_mentions=discord.AllowedMentions.none()
                 )
             return
+        reasoning = intent.reasoning_requested or settings.more_effort
+        if getattr(intent, "reasoning_disabled", False) or getattr(
+            intent, "search_requested", False
+        ):
+            reasoning = False
+        if getattr(intent, "search_requested", False) and intent.reasoning_requested:
+            await message.channel.send(
+                "Ask for web search or more effort in separate requests.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        feature = (
+            "search"
+            if getattr(intent, "search_requested", False)
+            else "reasoning"
+            if reasoning
+            else "chat"
+        )
+        notice = await self.feature_availability(scope, feature)
+        if notice:
+            await message.channel.send(notice, allowed_mentions=discord.AllowedMentions.none())
+            return
         context_count = (
-            min(self.config.automatic_context_count, 20)
+            min(
+                self.config.automatic_context_count
+                if settings.context_messages is None
+                else settings.context_messages,
+                20,
+            )
             if self.config.enable_message_content
             else 0
         )
@@ -1644,7 +1726,8 @@ class DiscordClient(discord.Client):
                     include_shared_history=self._can_read_shared_history(
                         message.channel, message.author
                     ),
-                    reasoning_requested=intent.reasoning_requested,
+                    reasoning_requested=reasoning,
+                    require_web_search=getattr(intent, "search_requested", False),
                 )
             from utils.message_utils import send_split_message
 

@@ -8,36 +8,43 @@ The self-hosted configuration below supports personal use. The public commercial
 
 ## Everyday chat
 
-Mention the actual bot account in Discord, for example `@Chat GPT can you check who's right here?`. Attach a screenshot to ask about it, or reply to a message and mention the bot to supply that message as context. Public bot conversations are shared within the channel or thread, so different people can continue the discussion. Private `/chat` conversations remain separate for each person.
+Mention the actual bot account in Discord, for example `@Chat GPT can you check who's right here?`. Attach a screenshot to ask about it, or reply to a message and mention the bot to supply that message as context. Public bot conversations are shared within the channel or thread, so different people can continue the discussion. AI replies to mentions and direct replies are public in that channel; older private conversation records remain separate for each person.
 
 Reply to a native Discord poll and mention the bot to discuss its question, answer options, and available results. The replied-to message is the primary subject; nearby posts supply background. Readable context includes poll data, embed cards, and visible component text such as button labels and select options. It does not press buttons or cast votes. Finalized poll counts include zero-vote options; unavailable counts are labeled unknown instead of assumed to be zero. Discord's [poll API](https://docs.discord.com/developers/resources/poll) can omit live results, and the current library cannot reliably distinguish every omitted count from zero. Reading another message requires channel-history permissions, and deleted or inaccessible references are identified as unavailable.
 
 Enable `ENABLE_OPENAI_WEB_SEARCH=true` with an OpenAI model that supports Responses web search, such as GPT-6 Luna. The model can search when answering factual or current questions and show clickable source links. This uses the existing OpenAI key and incurs additional search charges; it is limited to one tool call per answer. URLs in an invocation can also be read using the public-page browser. Websites requiring login or JavaScript are not supported.
 
-Only completed conversations with the bot are saved, in `CHAT_DATABASE_PATH` (default `data/chat.sqlite3`). History is bounded by the configured message, character, session, and retention limits; the default retention is 30 days. It survives normal restarts. Nearby channel messages and uploaded image bytes are used for the current request, not saved as a background channel archive. Keep the database private. `/reset` clears your private chat here; `/reset channel:true` clears the shared channel conversation and requires Manage Channels or bot administrator permission. Personal provider/style/privacy settings reset on restart or idle expiry.
+Only completed conversations with the bot are saved, in `CHAT_DATABASE_PATH` (default `data/chat.sqlite3`). History is bounded by the configured message, character, session, and retention limits; the default retention is 30 days. It survives normal restarts. Nearby channel messages and uploaded image bytes are used for the current request, not saved as a background channel archive. Keep the database private. `/settings` → Chat & data clears older private chat history; clearing shared channel history requires Manage Channels or bot-administrator permission. Personal style, effort, image, and context preferences reset on restart or idle expiry. Provider/model selection always comes from operator configuration.
 
 Expiration is checked when chat history is accessed: expired turns are excluded from the next answer and deleted during that operation. An idle or stopped bot does not purge its database on a timer.
 
 ## Commands and behavior
 
-- `/chat` sends a prompt to the selected provider. It accepts an optional image attachment, `use_web`, and `context_messages` from 0 to 20. Replies are private by default; `/private` changes that setting for your chats in the current channel.
-- `/search(query)` searches with Tavily and asks the selected AI provider to summarize up to five returned sources.
-- `/browse(url, question)` fetches and summarizes a public HTML or plain-text page. It does not run JavaScript or sign in to websites.
-- `/image(url, caption)` fetches an existing public image and sends it using your private/public reply setting. This is not AI image generation.
-- `/draw(prompt)` requests image generation when enabled and supported. In this build, generation is an optional paid OpenAI feature: it requires `ENABLE_IMAGE_GENERATION=true`, `ALLOW_PAID_PROVIDERS=true`, an OpenAI API key, and a compatible model. There is no free image-generation provider configured by default.
-- `/provider`, `/reset`, `/switchpersona`, `/status`, and `/help` select a provider, clear your conversation, select a style, show local settings, and list commands. `/replyall` toggles replies to ordinary channel messages for administrators in explicitly configured channels.
+Only four commands are published, and every slash command and its controls run without AI calls:
 
-The bot does not provide general Discord control, member moderation, or self-bot behavior. `/image` sends an existing image; `/draw` generates a new one only when the optional paid feature is enabled.
+- `/settings` opens a private, short panel for **More effort**, **Images**, chat style, recent-message context, saved-chat deletion, and plan usage. Changing a preference is free. Provider/model selection is not a customer option.
+- `/games` opens free party, team, Steam-data, and player-matching controls. An optional `game` autocomplete finds members who shared that catalog game.
+- `/profile` opens private forms for games, birthday, play preferences, sharing, export, and deletion. Saving is manual and confirmed; there is no AI-assisted save button.
+- `/plans` shows existing server plans and native checkout. Purchases require Discord’s desktop app or a supported browser on a computer; mobile purchases are unsupported.
+
+For paid AI, **mention the bot naturally** or reply directly to one of its messages. Examples: `@Sidecord Ai explain this screenshot`, `@Sidecord Ai think harder about this`, `@Sidecord Ai make me an image of a blue fox`, or `@Sidecord Ai search the web for the latest patch notes`. Uploading an image supplies it for discussion; image creation must be explicitly requested. These requests follow the existing metered chat, reasoning, image, and search paths; no AI call is used to classify them.
+
+The More effort preference applies to that member’s requests in this channel. A direct `no extra effort` request overrides it. Explicit web search takes precedence over the saved effort preference; a request explicitly asking for both is declined with a short explanation before spending. Negated, quoted, or code examples do not activate extra capabilities. Natural-language matching is deliberately bounded; it does not imply support for arbitrary actions.
+
+Mentions and direct replies are public. Commercial mode ignores unmentioned reply-all messages to avoid surprise usage. The bot cannot moderate members, change Discord permissions, join voice, run arbitrary commands, or create an in-game lobby. Private implementation questions receive a neutral refusal; public AI education and privacy disclosures remain available. Configured bot operators alone can see diagnostics in Settings; ordinary server managers retain only their authorized channel/party controls.
+
+See [customer-controls rollout notes](docs/customer-controls.md) for command migration and verification.
 
 ## Pick a game and build teams
 
 Gaming commands run without AI calls. They work in server channels without Message Content Intent, and respect the same server/channel allowlists as chat.
 
-1. Each player runs `/party join` in the channel you are using. Optional `skill` (1–10) and `role` describe that player's rating and preference for this session. Joining again updates them. Use the same rating scale across your group; these are self-reported ratings, not game ranks or verified MMR.
-2. For Steam suggestions, each player runs `/steam link profile:<Steam profile URL or SteamID64>` once in that server. This saves a public profile reference you supply; it does not sign in to Steam or verify account ownership. Saving it allows the server's parties to compare that library. `/steam status` shows your saved reference privately; `/steam unlink` removes it.
-3. `/games together` compares the channel party's visible libraries and suggests shared games. `mode:all` requires everyone to have the game; `mode:most` also considers games owned by part of the group and shows ownership counts. Multiplayer filtering is on by default; use `multiplayer_only:false` to see shared titles without that filter.
-4. `/teams make` splits the party into 2–4 teams. Balanced mode uses the supplied ratings and spreads repeated role preferences where possible; `balanced:false` shuffles players. It does not fetch competitive ranks, enforce a game's role rules, move voice-channel members, or create in-game lobbies.
-5. `/party show` displays the roster; `/party leave` removes yourself. `/party clear` requires Manage Channels or a configured bot administrator.
+1. Open `/games` → **Party & teams** → **Join party**. Skill (1–10) and role are self-reported preferences; joining again updates them.
+2. Use **Show party**, **Leave party**, or **Make teams** in that panel. Team counts are 2–4; balanced teams use the supplied ratings. **Clear party** requires Manage Channels or a configured bot administrator.
+3. Where the operator has enabled Steam, **Steam** → **Link Steam** saves a public profile reference without signing in or verifying ownership. **Steam status** and **Unlink Steam** remain available for existing records. Commercial mode does not enable new Steam API calls.
+4. When Steam matching is enabled, **Find shared Steam games** compares the channel party’s visible libraries. Choose ownership by all/most, multiplayer-only filtering, and up to ten suggestions.
+5. `/games game:<catalog selection>` or **Find players** finds current members who explicitly shared that game in this server. Saved games are edited in `/profile`.
+
 
 Parties contain at most 20 people and are separate for each server/channel. Steam profile references are separate for each server/user. Teams work without Steam, including for non-Steam games. Party and team results are visible in the channel, with mentions suppressed.
 
@@ -114,7 +121,7 @@ Railway's Free plan includes $1 of monthly usage credit, and new Trial accounts 
 
 ## Providers, fallback, and costs
 
-Set `DEFAULT_PROVIDER` and optionally `DEFAULT_MODEL`; `/provider` can also change the selection per user and channel. Available provider keys are:
+Operator configuration sets `DEFAULT_PROVIDER` and optionally `DEFAULT_MODEL`. Customer settings and legacy request snapshots cannot override that selection. Available operator provider keys are:
 
 | Provider | Environment variables | Notes |
 | --- | --- | --- |
@@ -172,15 +179,13 @@ Reasoning is not a separate free allowance: any reported reasoning tokens are
 included in the API's total output-token usage, which is charged to Luna's $7
 pool. Each response's cap covers reasoning and visible output together. Strict
 mode defaults to `reasoning.effort=none`, even if a different effort is
-configured. `/chat reason:true` or a direct request such as "think carefully
-about this" enables low reasoning for that request only. It does not change
-the next message or select a more expensive chat model. See OpenAI's
+configured. A direct mention such as "think carefully about this" enables low reasoning for that request; the free More effort preference can also enable it for that member’s requests in the channel. Neither selects a different chat model. See OpenAI's
 [reasoning cost controls](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs).
 
 Discord requests explicitly select reasoning per message, including outside
 strict mode: an environment reasoning preference does not silently turn it on.
 Web access remains an innate capability the model may use when needed; it does
-not require a separate request. Explicit `/search` still requires a search.
+not require a separate request. An explicit mention such as "search the web for…" still requires a search.
 Mention requests such as "draw a blue bird" route only to the image handler,
 never to an initial chat completion. Quoted commands, prior replies, and phrases
 such as "draw a conclusion" do not activate extra capabilities. Image generation
@@ -189,8 +194,7 @@ pre-request output-token or charge ceiling; output cost estimates are not a hard
 
 Provider and budget failures in normal Discord replies say "I can't do that
 right now." without exposing spending, quota, or provider configuration details.
-`/budget` is an explicitly
-requested private administrator report; it is not advertised by `/status`.
+The API budget report is available only to configured bot operators in `/settings` → Operator controls.
 
 Before activation, record the project's existing calendar-month API spend in
 `BUDGET_OPENING_MONTH_SPEND_USD`. A blank value means unknown and blocks paid
@@ -198,7 +202,7 @@ generation during the first month until supplied. Do not enter zero unless it
 has been verified. The baseline is imported once and cannot reset existing
 spend. It counts against the total ceiling; the Luna/extras split tracks spending
 after activation because the earlier category breakdown is unknown.
-`/budget` shows the shared limits, reservations, remaining allowances,
+The operator budget report shows the shared limits, reservations, remaining allowances,
 and next resets without calling an AI model.
 
 Keep `BUDGET_DATABASE_PATH` on persistent storage. On Railway use a persistent

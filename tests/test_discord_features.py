@@ -87,7 +87,7 @@ async def test_registered_commands_have_valid_discord_schemas():
     for command in commands.values():
         command.to_dict(client.tree)
     chat_options = {option.name for option in commands["chat"].parameters}
-    assert {"image", "use_web", "reason", "context_messages"} <= chat_options
+    assert {"image", "web_search", "more_effort"} <= chat_options
 
 
 @pytest.mark.asyncio
@@ -378,7 +378,7 @@ async def test_chat_defaults_to_no_additional_reasoning_and_allows_explicit_reas
     await client._commands["chat"].callback(interaction(), "ordinary question")
     assert manager.calls[-1][2]["reasoning_requested"] is False
 
-    await client._commands["chat"].callback(interaction(), "ordinary question", reason=True)
+    await client._commands["chat"].callback(interaction(), "ordinary question", more_effort=True)
     assert manager.calls[-1][2]["reasoning_requested"] is True
 
 
@@ -509,11 +509,11 @@ async def test_public_image_command_sends_file_source_and_suppresses_mentions():
 
 
 @pytest.mark.asyncio
-async def test_fallback_attribution_is_visible_but_not_saved_to_assistant_history():
+async def test_internal_fallback_attribution_is_neither_visible_nor_saved():
     manager = CapturingManager(attempted=(ProviderType.GEMINI, ProviderType.GROQ))
     client = DiscordClient(BotConfig(discord_bot_token="x", cooldown_seconds=0), manager)
     reply = await client.respond((1, 2, 3), "hello", private=False)
-    assert "Answered by gemini" in reply
+    assert reply == "answer"
     stored = next(iter(client.conversations.values())).messages
     assert stored[-1]["content"] == "answer"
 

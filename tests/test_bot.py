@@ -141,14 +141,14 @@ async def test_draw_rejection_does_not_echo_provider_exception():
 
 
 @pytest.mark.asyncio
-async def test_provider_rejects_image_only_models_and_draw_uses_image_model():
+async def test_provider_is_not_registered_and_draw_uses_image_model():
     manager = Manager()
     client = DiscordClient(
         BotConfig(discord_bot_token="x", enable_image_generation=True, cooldown_seconds=0), manager
     )
     client._register_commands()
     target = interaction()
-    await client._commands["provider"].callback(target, "openai", "image-model")
+    assert "provider" not in client._commands
     assert client.get_settings((1, 2, 3)).model == "auto"
     target = interaction()
     await client._commands["draw"].callback(target, "a landscape")
