@@ -20,7 +20,7 @@ https://discord.com/oauth2/authorize?client_id=1365724363722068120&scope=bot%20a
 
 The existing API key's read-only model listing verified Luna and the September 8 Flare 2.5 snapshot. It did not list the old image snapshot or gpt-4.1-mini, so the commercial gateway uses Luna for chat/search and Flare for images. Model availability does not alone prove a successful paid request; live smoke results are recorded separately.
 
-## Published release
+## Initial published release (historical)
 
 On September 30, production release `591b7b8a52d61e7bb05861f230fb334fd5e8c8da` reached Railway SUCCESS as deployment `1e98221c-6921-45d9-8661-2e37ee0bb1da`. The bot registered 26 commands, connected to both existing guilds, completed its authenticated entitlement snapshot, and completed storage maintenance with zero records removed. AI is enabled; native Discord purchases and the persistent $10 API cap are enforced ($7 Luna / $3 Extras, Pacific daily reset).
 
@@ -36,7 +36,7 @@ The LNCCX type-1/null-end purchase fix is integrated. Verification included 544 
 
 ## Remaining external verification
 
-- A real Discord purchase, customer access activation, and renewal have not yet been observed. No customer revenue or payout is claimed.
+- Two discounted Basic subscriptions are active with settled chat usage, as detailed below. A real renewal or refund has not been observed. No collected customer revenue or payout is claimed.
 - Top.gg and Discord Bot List submissions await the owner's OAuth approvals. No listing or review approval is claimed.
 - Discord Discovery requires a Community support server. Its selector had no eligible server; summary/language/description are prepared but not saved because the required server is absent.
 - Custom SKU artwork was not uploaded because the browser extension's file-upload permission is unavailable. Discord's default product artwork is live.
@@ -49,11 +49,23 @@ The owner's later funding instructions replace the shared personal $10 ceiling a
 
 The continuity source integrates LNCCX's [paid accounting migration](paid-budget-continuity.md) and [period identity fix](discord-period-identity.md). Migration preserves the existing budget and prepaid databases, creates a verified backup, and binds the accounting ledgers without resetting spending or unresolved reservations. Corrected end dates update the existing allowance; authenticated new billing periods grant once. Upgrade, downgrade, renewal, replay, restart, and refund regressions are included.
 
-Release completion requires Linux migration checks, exact-revision deployment verification, migration-record and accounting conservation checks, and a live Discord subscription. The prepared team-owner Basic checkout for The Mancave shows $0 today and $0 per month; final acceptance awaits the owner. A discounted live subscription can verify access and lifecycle, not collected revenue or payout.
+The continuity release from `e5ce62f` reached Railway as deployment `64e85469-b23d-4f94-9d38-ce5000d1b327`. Its migration ran on September 30 at 22:37:06 UTC. An independent live audit on October 1 at 04:08:40 UTC reported `paid-entitlement-v1`, preservation of all historical budget/prepaid preflight rows, and the backup `/app/data/budget.sqlite3.before-paid-v1-85685198d4124beda4fba6779bf88ef5.sqlite3` (SHA-256 `bbfd366cd1948c59ccc0e4847f46c67a1522a5bce75d51cbad34d95edfdb37ad`). The audit recorded 94,660 actual microdollars, zero unresolved holds, nine reservations, two grants and two requests; the ledger was unlocked and the entitlement snapshot was 28 seconds old. No ledger reset or deletion was performed.
+
+The owner reports personally completing both discounted Basic subscriptions at 23:12 UTC. An independent read-only production query confirmed two active Basic grants, each with 400 chat attempts and 1 MiB storage, two authenticated native periods, and two settled chat requests totaling 503 microdollars. This verifies live access and recorded usage; it is not checkout-cash evidence. No collected revenue or payout is claimed, and a true renewal or refund has not been observed. Do not contact or test The Mancave as part of this handoff.
+
+The latest production release is `f87edb9bc28c25295c128598bc1bf8b3a660dacf`, Railway SUCCESS deployment `3bae0a5c-ee44-4ad0-855e-005d324737b8`. PR 6 merged as `0464f6daf75f666c400edb38e190d3ba1df617a2`. CI for `e5ce62f` passed with 608 Linux tests and two skips; all four OS/Python jobs, Docker, and 79 site checks passed. Preserve the production branch and newer compact customer controls; do not redeploy the superseded continuity build.
+
+## Current public surfaces (October 1 UTC)
+
+All three published Discord SKU descriptions were updated and read back in the public store. They now state finite allowances per billing period, monthly renewal, cancellation retaining the paid period, and no rollover or usage overages. The outdated personal daily-availability wording is removed. Prices and quota quantities are unchanged.
+
+The matching website is live at https://sidecord-ai.com with Cloudflare Pages deployment `ce0f4194`. All 79 site checks passed. The live plans page was verified on desktop and at a 390-pixel mobile viewport without horizontal overflow. Its notice says there are no mid-period top-ups, while explaining that a verified monthly renewal refreshes the allowance once.
+
+These publication changes do not modify the Railway runtime. The separate events/tournaments implementation remains unpublished and is outside this release. Reviewed hosting charges, expected net revenue, and payout evidence have not been supplied to the planning report; those values remain unknown rather than zero. The $100 advisory baseline never blocks paid subscription access.
 
 ## Interface references and boundaries
 
-[Dyno](https://dyno.gg/) separates its command/help navigation from Premium. [Discord Bot List](https://discordbotlist.com/) presents a direct Add Bot action and short, specific feature descriptions. Sidecord follows those useful patterns with a direct invite, a concise free-tools section, separate AI plans, and private `/plans` and `/usage` views.
+[Dyno](https://dyno.gg/) separates its command/help navigation from Premium. [Discord Bot List](https://discordbotlist.com/) presents a direct Add Bot action and short, specific feature descriptions. Sidecord follows those useful patterns with a direct invite, a concise free-tools section, separate AI plans, and private plan/usage controls under its compact four-command interface.
 
 Free features are profiles, local game discovery, parties, and team building. Paid features are AI chat, image understanding, explicit reasoning, available web lookups, and explicit image generation. Voice, image editing, external file hosting, and Steam-library import are not advertised as included. Regular errors remain generic; updated plan pages disclose finite allowances for the actual subscription billing period and automatic renewal without rollover or overage charges.
 
