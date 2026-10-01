@@ -37,7 +37,7 @@ The LNCCX type-1/null-end purchase fix is integrated. Verification included 544 
 ## Remaining external verification
 
 - Two discounted Basic subscriptions are active with settled chat usage, as detailed below. A real renewal or refund has not been observed. No collected customer revenue or payout is claimed.
-- Top.gg and Discord Bot List submissions await the owner's OAuth approvals. No listing or review approval is claimed.
+- Top.gg submission still awaits sign-in authorization. Discord Bot List is already signed in, and a submission draft is prepared with Games, Social, and Utility tags. Its rules require a help command or alias; the deployed four-command interface removes the older `/help` registration, so submission remains pending resolution of that requirement. No listing or review approval is claimed.
 - Discord Discovery requires a Community support server. Its selector had no eligible server; summary/language/description are prepared but not saved because the required server is absent.
 - Custom SKU artwork was not uploaded because the browser extension's file-upload permission is unavailable. Discord's default product artwork is live.
 
@@ -59,7 +59,9 @@ The latest production release is `f87edb9bc28c25295c128598bc1bf8b3a660dacf`, Rai
 
 All three published Discord SKU descriptions were updated and read back in the public store. They now state finite allowances per billing period, monthly renewal, cancellation retaining the paid period, and no rollover or usage overages. The outdated personal daily-availability wording is removed. Prices and quota quantities are unchanged.
 
-The matching website is live at https://sidecord-ai.com with Cloudflare Pages deployment `ce0f4194`. All 79 site checks passed. The live plans page was verified on desktop and at a 390-pixel mobile viewport without horizontal overflow. Its notice says there are no mid-period top-ups, while explaining that a verified monthly renewal refreshes the allowance once.
+The matching website was published at https://sidecord-ai.com with Cloudflare Pages deployment `ce0f4194`. All 79 site checks passed. The live plans page was verified on desktop and at a 390-pixel mobile viewport without horizontal overflow. Its notice says there are no mid-period top-ups, while explaining that a verified monthly renewal refreshes the allowance once.
+
+The subsequent copy-only deployment `0ee8eda6` corrects the Support page's retired commands: chat clearing is under `/settings` → **Chat & data**, leaving a party is under `/games` → **Party & teams**, and removing an existing Steam link is under `/games` → **Steam**. The README now matches these paths and the shared-chat permission requirement. All 79 site checks passed; the published Support page was verified on desktop and at 390 pixels with no horizontal overflow. This follow-up is based on main `f670e407253da7a9f1a7748851e19b79c350e394`, the copy-only PR 7 merge above PR 6; it contains no runtime changes.
 
 These publication changes do not modify the Railway runtime. The separate events/tournaments implementation remains unpublished and is outside this release. Reviewed hosting charges, expected net revenue, and payout evidence have not been supplied to the planning report; those values remain unknown rather than zero. The $100 advisory baseline never blocks paid subscription access.
 
