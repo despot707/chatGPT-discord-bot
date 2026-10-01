@@ -152,7 +152,7 @@ async def test_gaming_commands_register_valid_bounded_schemas_and_help_text():
     help_call = make_interaction()
     await client._commands["help"].callback(help_call)
     message = payload(help_call)["content"].lower()
-    assert "/steam link" in message and "/party join" in message and "/games" in message
+    assert "/settings" in message and "/profile" in message and "/games" in message
 
 
 @pytest.mark.asyncio

@@ -115,5 +115,6 @@ async def test_mention_budget_provider_error_is_generic():
 def test_public_error_renderer_preserves_nonbudget_validation_errors():
     from src.aclient import public_error_message
 
-    assert public_error_message(ValueError("Unknown model")) == "Unknown model"
+    assert public_error_message(ValueError("Unknown model")) == PUBLIC_FAILURE
+    assert public_error_message(ValueError("Choose a valid day")) == "Choose a valid day"
     assert public_error_message(ValueError("Daily quota exhausted")) == PUBLIC_FAILURE

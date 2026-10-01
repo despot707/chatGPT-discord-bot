@@ -115,10 +115,12 @@ async def test_disabled_chat_image_and_search_return_generic_before_cost_paths()
 
 
 @pytest.mark.asyncio
-async def test_disabled_mode_keeps_status_and_free_gaming_commands_available():
+async def test_disabled_mode_keeps_operator_status_and_free_gaming_commands_available():
     store = SimpleNamespace(party=lambda *_args: [], get_steam=lambda *_args: None)
     client = DiscordClient(
-        BotConfig.from_env(_env()), provider_manager=ProviderManager(_env()), gaming_store=store
+        BotConfig.from_env(_env(BOT_ADMIN_IDS="3")),
+        provider_manager=ProviderManager(_env()),
+        gaming_store=store,
     )
     client._register_commands()
 

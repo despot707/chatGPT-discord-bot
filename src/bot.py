@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 class DiscordClient(PrepaidClientMixin, CatalogClientMixin, ProfileClientMixin, BaseDiscordClient):
     """Chat/gaming bot with private, member-entered settings instead of passive profiles."""
 
+    async def setup_hook(self) -> None:
+        # Do not let mixins re-add retired aliases after the compact tree has synced.
+        if self._registered:
+            return
+        await super().setup_hook()
+
 
 def run_discord_bot(config: BotConfig | None = None, provider_manager=None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

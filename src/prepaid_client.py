@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 
 from src.aclient import BotRequestError
+from src.customer_privacy import INTERNAL_DETAILS_REFUSAL, asks_for_internal_details
 from src.discord_purchases import DiscordPurchases, sku_map
 from src.prepaid import PRODUCTS, Denied
 from src.prepaid_runtime import SCOPE, PaidManager, PaidWeb, enforcing, runtime
@@ -26,6 +27,7 @@ else:
 
 FREE_COMMANDS = {
     "plans",
+    "settings",
     "usage",
     "profile",
     "help",
@@ -45,7 +47,6 @@ CORE_COMMANDS = {
     "party",
     "games",
     "teams",
-    "provider",
     "switchpersona",
     "replyall",
     "steam",
@@ -91,6 +92,13 @@ def plan_view(skus: dict[int, str] | None) -> discord.ui.View | None:
                 sku_id=sku_id,
             )
         )
+    view.add_item(
+        discord.ui.Button(
+            label="Open store on a computer",
+            url=f"https://discord.com/application-directory/{SIDECORD_APPLICATION_ID}/store",
+            row=1,
+        )
+    )
     return view
 
 
@@ -98,9 +106,8 @@ def plan_embed(*, checkout_available: bool = False) -> discord.Embed:
     e = discord.Embed(
         title="Free tools & AI plans",
         description=(
-            "**Monthly Discord guild subscriptions.** AI allowances are shared by the whole server. "
-            "No rollover or overage charges. Cancel through Discord; access continues until the "
-            "current paid period ends."
+            "**AI for your whole server.** Subscribe using Discord’s desktop app or a supported "
+            "browser on a computer. Mobile purchases aren’t supported."
             if checkout_available
             else "**Plan preview. Purchases are not enabled here.**\nAI allowances are designed to be shared by each server."
         ),
@@ -119,7 +126,7 @@ def plan_embed(*, checkout_available: bool = False) -> discord.Embed:
                 f"{count:,} {label}"
                 for key, label in [
                     ("chat", "chat attempts"),
-                    ("reasoning", "advanced reasoning attempts"),
+                    ("reasoning", "more-effort attempts"),
                     ("search", "web searches"),
                     ("images", "image generations"),
                 ]
@@ -177,34 +184,55 @@ class PrepaidClientMixin(_PaidBase):
             # Intentionally no third-party account/library API in commercial mode.
             # A new paid API needs its own bounded price contract and adapter.
             self.steam_service = None
-            original = self.tree.interaction_check
 
-            async def check(interaction):
-                from src.prepaid_runtime import free_interaction_allowed
+    async def customer_action_allowed(self, interaction, name: str) -> bool:
+        """Apply the same free/core/paid perimeter to commands and panel actions."""
+        from src.prepaid_runtime import free_interaction_allowed
 
-                if not free_interaction_allowed(
-                    interaction.user.id, getattr(interaction, "id", None)
-                ):
-                    return False
-                if not await original(interaction):
-                    return False
-                name = getattr(getattr(interaction, "command", None), "root_parent", None)
-                name = getattr(name or getattr(interaction, "command", None), "name", "")
-                try:
-                    if name not in FREE_COMMANDS | CORE_COMMANDS | NETWORK_COMMANDS:
-                        raise Denied("This feature is not approved for metered plans.")
-                    if name in CORE_COMMANDS:
-                        runtime().core(interaction.guild_id or 0, interaction.user.id)
-                    elif name in NETWORK_COMMANDS:
-                        runtime().ready()
-                        runtime().ledger.assert_active(interaction.guild_id or 0)
-                    return True
-                except Denied as exc:
-                    logging.getLogger(__name__).info("Commercial command denied: %s", exc)
-                    await private_notice(interaction, "I can't do that right now.")
-                    return False
+        if not await super().customer_action_allowed(interaction, name):
+            return False
+        if not enforcing():
+            return True
+        if not free_interaction_allowed(interaction.user.id, getattr(interaction, "id", None)):
+            await private_notice(interaction, "Please wait a moment before trying again.")
+            return False
+        try:
+            if name not in FREE_COMMANDS | CORE_COMMANDS | NETWORK_COMMANDS:
+                raise Denied("This feature is not approved for metered plans.")
+            if name in CORE_COMMANDS:
+                runtime().core(interaction.guild_id or 0, interaction.user.id)
+            elif name in NETWORK_COMMANDS:
+                runtime().ready()
+                runtime().ledger.assert_active(interaction.guild_id or 0)
+            return True
+        except Denied as exc:
+            logging.getLogger(__name__).info("Commercial action denied: %s", exc)
+            await private_notice(interaction, "I can't do that right now.")
+            return False
 
-            setattr(self.tree, "interaction_check", check)
+    async def feature_availability(self, scope, feature: str) -> str | None:
+        """Read-only UX preflight; the paid gateway remains the charging authority."""
+        if not enforcing():
+            return None
+        labels = {
+            "chat": "Chat",
+            "reasoning": "More effort",
+            "search": "Web search",
+            "images": "Images",
+        }
+        if feature not in labels or not self.allowed(scope):
+            return "I can't do that right now."
+        try:
+            summary = await asyncio.wait_for(
+                asyncio.to_thread(runtime().ledger.summary, scope[0]), 1.5
+            )
+            if summary["included"].get(feature, 0) <= 0:
+                return f"{labels[feature]} isn’t included in this server’s plan. See /plans."
+            if summary["remaining"].get(feature, 0) <= 0:
+                return f"This server’s {labels[feature].lower()} allowance is used up. Check Plan & usage in /settings."
+            return None
+        except Exception:
+            return "Plan details are unavailable. Please try again."
 
     async def on_ready(self):
         await super().on_ready()
@@ -376,7 +404,7 @@ class PrepaidClientMixin(_PaidBase):
                 )
                 for f, label in [
                     ("chat", "Chat"),
-                    ("reasoning", "Advanced reasoning"),
+                    ("reasoning", "More effort"),
                     ("search", "Web searches"),
                     ("images", "Image generation"),
                 ]:
@@ -418,6 +446,8 @@ class PrepaidClientMixin(_PaidBase):
                     SCOPE.reset(token)
 
     async def generate_image(self, prompt, scope, settings_snapshot=None):
+        if asks_for_internal_details(prompt):
+            raise BotRequestError(INTERNAL_DETAILS_REFUSAL)
         if not enforcing():
             return await super().generate_image(prompt, scope, settings_snapshot)
         async with self._request_slot(scope):

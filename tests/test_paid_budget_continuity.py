@@ -305,7 +305,7 @@ async def test_monthly_planning_does_not_compare_lifetime_spend_to_monthly_basel
     assert report["as_of"] == clock[0].isoformat()
 
 
-async def test_paid_metadata_supports_real_status_provider_commands_without_sdk(
+async def test_paid_metadata_supports_operator_status_without_customer_provider_picker(
     tmp_path, monkeypatch
 ):
     from src import prepaid_runtime as pr
@@ -320,6 +320,7 @@ async def test_paid_metadata_supports_real_status_provider_commands_without_sdk(
     client = DiscordClient(
         BotConfig(
             discord_bot_token="x",
+            bot_admin_ids=frozenset({3}),
             hard_budget_enabled=True,
             discord_purchase_mode="enforce",
             discord_application_id=APP,
@@ -331,10 +332,7 @@ async def test_paid_metadata_supports_real_status_provider_commands_without_sdk(
     target = interaction()
     await client.tree.get_command("status").callback(target)
     assert "gpt-6-luna" in target.response.send_message.call_args.args[0]
-    await client.tree.get_command("provider").callback(target)
-    assert "Available providers: openai" in target.response.send_message.call_args.args[0]
-    await client.tree.get_command("provider").callback(target, "openai", "gpt-6-luna")
-    assert "Provider set to openai" in target.response.send_message.call_args.args[0]
+    assert client.tree.get_command("provider") is None
     provider = client.provider_manager.get_provider(ProviderType.OPENAI)
     assert not hasattr(provider, "client")
     assert [m.name for m in client.provider_manager.get_provider_models(ProviderType.OPENAI)] == [

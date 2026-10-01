@@ -94,7 +94,10 @@ async def test_capacity_fails_fast_and_settings_cannot_change_mid_request():
 async def test_settings_are_per_user_channel_and_provider_snapshot_is_used():
     manager = FakeManager()
     manager.provider.event = asyncio.Event()
-    client = DiscordClient(BotConfig(discord_bot_token="token", cooldown_seconds=0), manager)
+    client = DiscordClient(
+        BotConfig(discord_bot_token="token", cooldown_seconds=0, default_model="chosen-model"),
+        manager,
+    )
     a = client.get_settings((1, 2, 3))
     b = client.get_settings((1, 2, 4))
     a.persona = "creative"

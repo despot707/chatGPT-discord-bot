@@ -49,14 +49,17 @@ def test_native_checkout_requires_all_live_gates_and_exact_sku_map(monkeypatch):
     assert active_plan_skus(replace(config, hard_budget_enabled=False)) is None
     view = plan_view(skus)
     assert view is not None
-    assert {button.sku_id for button in view.children} == set(PLAN_SKUS.values())
+    assert {button.sku_id for button in view.children if button.sku_id} == set(PLAN_SKUS.values())
     for button in view.children:
+        if button.url:
+            continue
         component = button.to_component_dict()
         assert component["style"] == 6
         assert "sku_id" in component
         assert "label" not in component and "custom_id" not in component
     active = plan_embed(checkout_available=True).to_dict()
-    assert "cancel through discord" in active["description"].lower()
+    assert "computer" in active["description"].lower()
+    assert "mobile purchases" in active["description"].lower()
     assert any("400 chat attempts" in f["value"] for f in active["fields"])
 
     monkeypatch.setenv("PREPAID_MODE", "preview")
