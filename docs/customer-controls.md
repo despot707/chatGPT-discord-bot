@@ -2,9 +2,13 @@
 
 ## Customer surface
 
+Settings and games include a private Get started guide with four short game-night steps and direct links to profile, party, player-finding, and AI plan flows. New game entries start private; members must explicitly choose This server on a saved game for /games player matching to include them. Matching lists only members who shared the selected title.
+
+In prepaid commercial mode, Steam library imports and new links are unavailable in the public bot. The games panel labels the Steam entry as a saved link; that screen still allows members to inspect or unlink a previous record. The controls do not advertise or make Steam API calls.
+
 Four published slash commands: `settings`, `games`, `profile`, `plans`. All are code-only. Free controls never call a text/image model. AI-assisted profile proposals and paid slash entry points are absent from the customer command manifest and panel action registry.
 
-Settings starts with More effort, Images, Chat style, Chat & data, and Plan & usage. Settings and games panels are ephemeral, owner/server/channel-bound, expire after ten minutes, and reject stale buttons, stale/replayed forms, and actions after closing. An operator diagnostics entry appears only for configured `BOT_ADMIN_IDS`; it is rechecked when invoked. Manage Channels still permits shared-chat and party clearing, without exposing provider/model/budget diagnostics.
+Settings starts with Get started, More effort, Images, Chat style, Chat & data, and Plan & usage. Settings and games panels are ephemeral, owner/server/channel-bound, expire after ten minutes, and reject stale buttons, stale/replayed forms, and actions after closing. An operator diagnostics entry appears only for configured `BOT_ADMIN_IDS`; it is rechecked when invoked. Manage Channels still permits shared-chat and party clearing, without exposing provider/model/budget diagnostics.
 
 Images defaults on to preserve existing explicit generation behavior; More effort defaults off. Both are free, per-user/channel, in-memory preferences. Image generation still requires operator enablement and the existing image allowance. Existing histories/profiles/allowances are not deleted or rewritten by this migration. No schema migration is required.
 

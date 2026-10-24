@@ -12,11 +12,18 @@ permissions:
 jobs:
   public-site:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sale_status: [coming_soon, live]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - name: Build and check public pages
+      - name: Build and check ${{ matrix.sale_status }} pages
         working-directory: site
+        env:
+          NODE_ENV: test
+          SITE_SALE_STATUS: ${{ matrix.sale_status }}
         run: npm test

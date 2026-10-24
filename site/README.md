@@ -32,9 +32,12 @@ The support URL points to the public repository issue tracker. It is a user-init
 
 ## Routes
 
-- `/` landing page
+- `/` gaming-community landing page
+- `/getting-started/` first game-night guide
 - `/plans/` plan preview
 - `/privacy/` application privacy policy plus a distinct static website disclosure
 - `/terms/` application terms
 - `/support/` in-app controls and support guidance
 - `/404.html` missing-page guidance
+
+Live builds allow search indexing, emit canonical and social preview metadata with a 1200 × 630 PNG card, and list the six public routes in the sitemap. `coming_soon` preview builds block crawling, omit indexable sitemap entries and checkout links, and mark every route noindex. The CI workflow verifies both build states.

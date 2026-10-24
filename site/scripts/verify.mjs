@@ -18,13 +18,13 @@ async function walk(dir) {
 }
 await walk(out);
 const htmlFiles = files.filter((file) => file.endsWith('.html'));
-check(htmlFiles.length === 6, 'all six static routes are built');
-for (const route of ['index.html', 'plans/index.html', 'privacy/index.html', 'terms/index.html', 'support/index.html', '404.html']) {
+check(htmlFiles.length === 7, 'all seven static routes are built');
+for (const route of ['index.html', 'getting-started/index.html', 'plans/index.html', 'privacy/index.html', 'terms/index.html', 'support/index.html', '404.html']) {
   check(files.includes(path.join(out, route)), `${route} exists`);
 }
 const html = await Promise.all(htmlFiles.map(read));
 const allHtml = html.join('\n');
-for (const route of ['/plans/', '/privacy/', '/terms/', '/support/']) {
+for (const route of ['/getting-started/', '/plans/', '/privacy/', '/terms/', '/support/']) {
   check((allHtml.match(new RegExp(`<a href="${route.replaceAll('/', '\\/')}"`, 'g')) ?? []).length >= 2, `${route} is linked internally`);
 }
 const configuredSaleStatus = JSON.parse(await read(path.join(site, 'site.config.json'))).saleStatus;
@@ -32,9 +32,14 @@ const saleStatus = process.env.NODE_ENV === 'test' ? (process.env.SITE_SALE_STAT
 check(saleStatus === 'live' ? (allHtml.match(/class="button button-primary plan-purchase"/g) ?? []).length === 3 : !/<a[^>]*>[^<]*(buy now|subscribe now|checkout|purchase)[^<]*<\/a>/i.test(allHtml), saleStatus === 'live' ? 'all live plan cards have purchase links' : 'preview has no purchase or checkout call to action');
 check(!/<script\b|google-analytics|googletagmanager|facebook\.net|segment\.com|hotjar/i.test(allHtml), 'pages have no JavaScript, analytics, or tracker');
 check(!/href="#"/.test(allHtml), 'no dead placeholder link is present');
-check(saleStatus === 'live' || JSON.parse(await read(path.join(site, 'site.config.json'))).inviteUrl ? /Add to a server ↗/.test(allHtml) : /Public installation is being prepared\./.test(allHtml), 'installation link matches the configured availability');
-check(/illustrative example/i.test(allHtml) && /not a real conversation or testimonial/i.test(allHtml), 'sample conversation is labeled illustrative');
-check(!/Steam libraries/.test(allHtml), 'site does not promise Steam library integration');
+check(JSON.parse(await read(path.join(site, 'site.config.json'))).inviteUrl ? /Add to Discord ↗/.test(allHtml) : /Get help/.test(allHtml) && /Public installation is being prepared\./.test(allHtml), 'installation link matches the configured availability');
+const homePage = await read(path.join(out, 'index.html'));
+const gettingStarted = await read(path.join(out, 'getting-started/index.html'));
+const gameDemo = homePage.slice(homePage.indexOf('class="game-demo"'), homePage.indexOf('</section>', homePage.indexOf('class="game-demo"')));
+check(homePage.includes('Find your people.') && homePage.includes('Get in the game.') && homePage.includes('No AI needed for profiles, player discovery, parties, or teams.'), 'homepage leads with free gaming outcomes');
+check(gameDemo.toLowerCase().includes('players for overwatch 2') && gameDemo.toLowerCase().includes('only server-shared games appear') && gameDemo.toLowerCase().includes('private search') && !gameDemo.includes('JOIN') && !gameDemo.includes('5 ready') && !gameDemo.includes('VOICE'), 'homepage product illustration reflects supported private player-search results');
+check(gettingStarted.includes('/profile') && gettingStarted.includes('/games') && gettingStarted.includes('select <strong>This server</strong>') && gettingStarted.includes('submit the form to save') && gettingStarted.includes('text channel where you’re coordinating') && gettingStarted.includes('self-reported skill ratings'), 'first-game guide uses real controls and explains sharing and team balance');
+check(homePage.includes('sample members and results') && homePage.includes('Illustrative interface'), 'static product illustration is labeled as sample content');
 check(allHtml.includes('Export settings') && allHtml.includes('Delete my data') && allHtml.includes('/profile'), 'support describes the private profile data controls');
 check(allHtml.includes('Cloudflare may process technical request metadata') && allHtml.includes('separate from the Discord Service policy'), 'website hosting disclosure is distinct');
 
@@ -43,14 +48,28 @@ const configJson = JSON.stringify(config);
 const baseUrl = new URL(config.baseUrl);
 check(baseUrl.protocol === 'https:' && baseUrl.pathname === '/' && !baseUrl.username && !baseUrl.password, 'canonical base is a clean HTTPS origin');
 check(!allHtml.includes(configJson), 'private build configuration is not copied into public output');
-for (const [route, page] of [['/', html[htmlFiles.indexOf(path.join(out, 'index.html'))]], ['/plans/', await read(path.join(out, 'plans/index.html'))], ['/privacy/', await read(path.join(out, 'privacy/index.html'))], ['/terms/', await read(path.join(out, 'terms/index.html'))], ['/support/', await read(path.join(out, 'support/index.html'))]]) {
+for (const [route, page] of [['/', homePage], ['/getting-started/', gettingStarted], ['/plans/', await read(path.join(out, 'plans/index.html'))], ['/privacy/', await read(path.join(out, 'privacy/index.html'))], ['/terms/', await read(path.join(out, 'terms/index.html'))], ['/support/', await read(path.join(out, 'support/index.html'))]]) {
   check(page.includes(`rel="canonical" href="${config.baseUrl}${route}"`), `${route} has its canonical URL`);
   const navMatches = page.match(/aria-current="page"/g) ?? [];
   check(navMatches.length === 1, `${route} marks exactly one current navigation link`);
 }
 check(allHtml.includes(config.brand.name) && allHtml.includes(config.brand.shortName), 'central brand values appear in the static site');
 const sitemap = await read(path.join(out, 'sitemap.xml'));
-check(sitemap.includes(`${config.baseUrl}/plans/`) && sitemap.includes(`${config.baseUrl}/support/`), 'sitemap contains canonical public routes');
+const robots = await read(path.join(out, 'robots.txt'));
+if (saleStatus === 'live') {
+  check(robots.includes('Allow: /') && robots.includes(`${config.baseUrl}/sitemap.xml`) && !robots.includes('Disallow: /'), 'live robots allows indexing and points to the sitemap');
+  for (const route of ['/', '/getting-started/', '/plans/', '/privacy/', '/terms/', '/support/']) {
+    const page = route === '/' ? homePage : await read(path.join(out, route.slice(1), 'index.html'));
+    check(page.includes('name="robots" content="index,follow"'), `${route} is indexable in live mode`);
+    check(sitemap.includes(`${config.baseUrl}${route}`), `${route} appears in the live sitemap`);
+    check(page.includes('property="og:title"') && page.includes('property="og:image"') && page.includes('social-card.png') && page.includes('property="og:image:alt"') && page.includes('name="twitter:card"'), `${route} has social preview metadata`);
+  }
+  check(!sitemap.includes('/404.html'), '404 page is omitted from sitemap');
+} else {
+  check(robots.includes('Disallow: /') && !robots.includes('Allow: /'), 'preview robots blocks crawling');
+  check(!/<loc>/.test(sitemap), 'preview sitemap contains no indexable routes');
+  check(html.every((page) => page.includes('name="robots" content="noindex,nofollow"')), 'preview pages and 404 are noindex');
+}
 
 const actualPrivacy = await read(path.join(repo, 'PRIVACY.md'));
 const actualTerms = await read(path.join(repo, 'TERMS.md'));
@@ -66,13 +85,14 @@ check(privacyPage.includes(`href="${config.supportUrl}"`) && termsPage.includes(
 const pricing = await read(path.join(repo, config.pricing.source));
 const plansPage = await read(path.join(out, 'plans/index.html'));
 for (const value of ['$1.99', '$4.99', '$9.99', '400', '500', '1000', '50', '100', '10', '20', '3']) check(plansPage.includes(value), `plan page includes price/allowance ${value}`);
+check(plansPage.includes('<h2>Free</h2>') && plansPage.includes('$0') && plansPage.includes('Start with free tools') && plansPage.includes('No AI credit or trial'), 'plan comparison presents the ongoing free gaming tier');
 check(!plansPage.includes('Server operations') && !plansPage.includes('Saved data') && !plansPage.includes('Optional add-ons') && !plansPage.includes('Extra chat') && !plansPage.includes('Storage boost'), 'public plans omit core counts and unsupported add-on offers');
 check(pricing.includes('## Included allowances'), 'published allowances are derived from the reviewed plan table');
 if (saleStatus === 'live') {
   for (const [sku, product] of Object.entries({ '1554920142532513832': 'Basic', '1554920641088593990': 'Plus', '1554920977488551936': 'Premium' })) {
     check(plansPage.includes(`https://discord.com/application-directory/1365724363722068120/store/${sku}`), `${product} links to its reviewed Discord SKU`);
   }
-  for (const phrase of ['shared across this server', 'authenticated Discord billing period', 'refreshes each allowance once', 'access and remaining allowance continue through the current paid period', 'does not roll over', 'no overage charges', 'Cancel any time in Discord subscription settings', 'free trial', 'image edits', 'image hosting', 'unknown provider usage may use an attempt']) check(plansPage.toLowerCase().includes(phrase.toLowerCase()), `live plans disclose ${phrase}`);
+  for (const phrase of ['shared by members of the subscribed server', 'authenticated Discord billing period', 'refreshes each allowance once', 'access and remaining allowance continue through the current paid period', 'does not roll over', 'no overage charges', 'Cancel any time in Discord subscription settings', 'free trial', 'image edits', 'image hosting', 'unknown provider usage may use an attempt']) check(plansPage.toLowerCase().includes(phrase.toLowerCase()), `live plans disclose ${phrase}`);
   const supportPage = await read(path.join(out, 'support/index.html'));
   check(supportPage.includes('Manage your AI subscription') && supportPage.includes('Subscriptions in Discord'), 'live support explains how to manage Discord subscriptions');
   check(!/not available for purchase yet|no purchase or charge can occur/i.test(plansPage), 'live plans do not carry inactive-checkout messaging');
@@ -103,5 +123,6 @@ check(await stat(path.join(out, 'favicon.svg')).then(() => true), 'original site
 
 const headers = await read(path.join(out, '_headers'));
 for (const header of ['Content-Security-Policy:', "script-src 'none'", 'X-Content-Type-Options:', 'Referrer-Policy:', 'Permissions-Policy:']) check(headers.includes(header), `${header} is configured`);
-check(html.every((page) => page.includes('name="robots" content="noindex,nofollow"')), 'pilot pages are marked noindex');
-console.log(`PASS: ${checks.length} checks across ${htmlFiles.length} routes`);
+const socialCard = await readFile(path.join(out, 'social-card.png'));
+check(socialCard.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && socialCard.readUInt32BE(16) === 1200 && socialCard.readUInt32BE(20) === 630, '1200 by 630 PNG social preview is emitted');
+console.log(`PASS: ${checks.length} checks across ${htmlFiles.length} routes (${saleStatus})`);
