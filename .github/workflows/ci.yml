@@ -22,8 +22,19 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Create isolated Python environment
+        run: python -m venv .venv
+      - name: Add isolated Python tools to PATH (Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+      - name: Add isolated Python tools to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:GITHUB_WORKSPACE '.venv/Scripts')
       - name: Install dependencies
         run: |
+          python -c "import sys; assert sys.prefix != sys.base_prefix, 'CI must use its isolated environment'"
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
       - name: Lint

@@ -30,6 +30,8 @@ The complete Windows regression suite passed with 812 tests and 34 platform skip
 
 The first fresh release audit failed on previously pinned dependencies. The release updates aiohttp to 3.14.4, Pillow to 13.0.0, certifi to 2026.10.19, and the development-tool dependency filelock to 4.2.1. An isolated Python environment passed dependency consistency and the full development-requirements vulnerability audit with no known vulnerabilities; the application regression suite also passed with the updated runtime packages. Existing shared Python environments were left unchanged.
 
+CI also creates an isolated environment before installation. This prevents unrelated tools preinstalled on a runner (such as pipx) from causing false project dependency conflicts. Every existing quality, audit, Windows launcher, and Docker persistence check remains enabled.
+
 ## Organic rollout
 
 1. Keep the production source and attached volume intact. Build and verify a tested commit before any deployment; do not reset, replace, or migrate the live volume as part of a copy update.
