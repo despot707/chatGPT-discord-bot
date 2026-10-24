@@ -28,6 +28,8 @@ Current publish access is insufficient: Cloudflare identity lacks Pages write pe
 
 The complete Windows regression suite passed with 812 tests and 34 platform skips, with the existing `audioop` deprecation warning. Ruff lint and formatting, full mypy (43 source files), Python compilation, dependency consistency, and diff whitespace checks passed. The website passed 105 checks in live mode and 80 in preview mode, each covering seven routes. Desktop and 360/390-pixel mobile browser checks cover layout and the reviewed plan links. Linux and Docker checks run separately in GitHub Actions; local Windows skips do not establish those results.
 
+The first fresh release audit failed on previously pinned dependencies. The release updates aiohttp to 3.14.4, Pillow to 13.0.0, certifi to 2026.10.19, and the development-tool dependency filelock to 4.2.1. An isolated Python environment passed dependency consistency and the full development-requirements vulnerability audit with no known vulnerabilities; the application regression suite also passed with the updated runtime packages. Existing shared Python environments were left unchanged.
+
 ## Organic rollout
 
 1. Keep the production source and attached volume intact. Build and verify a tested commit before any deployment; do not reset, replace, or migrate the live volume as part of a copy update.
