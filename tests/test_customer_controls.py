@@ -81,6 +81,83 @@ async def test_settings_opens_private_short_panel_without_provider_details():
     assert "public" in sent["embed"].description.lower()
 
 
+@pytest.mark.asyncio
+async def test_get_started_is_private_scannable_and_navigation_only():
+    client = await compact_client()
+    request = target()
+    await client.tree.get_command("settings").callback(request)
+    panel = request.response.send_message.await_args.kwargs["view"]
+    start_button = button(panel, "start")
+    unauthorized = target()
+    unauthorized.user.id = 444
+    await start_button.callback(unauthorized)
+    assert panel.screen == "settings"
+    assert "another session" in unauthorized.response.send_message.await_args.args[0]
+    await start_button.callback(target())
+    assert panel.screen == "start"
+    await start_button.callback(target())
+    assert panel.screen == "start"
+    assert panel.embed().title.startswith("Get started")
+    guide = panel.embed().description
+    assert all(f"**{number} ·" in guide for number in ("1", "2", "3", "4"))
+    assert "New games start private" in guide
+    assert "This server" in guide
+    assert "allowances" in guide
+    actions = {item.action: item for item in panel.children if hasattr(item, "action")}
+    import discord
+
+    assert actions["profile"].style == discord.ButtonStyle.primary
+    assert {"party", "findplayers", "usage", "plans"} <= set(actions)
+    await actions["party"].callback(target())
+    assert panel.screen == "party"
+    assert client.provider_manager.provider.calls == []
+
+    await button(panel, "games").callback(target())
+    await button(panel, "start").callback(target())
+    plan_request = target()
+    await button(panel, "plans").callback(plan_request)
+    plan_message = plan_request.response.send_message.await_args.kwargs
+    assert plan_message["ephemeral"] is True
+    assert plan_message["embed"].title == "Free tools & AI plans"
+    assert client.provider_manager.provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_started_is_reachable_from_games_and_prepaid_hides_steam_acquisition():
+    from dataclasses import replace
+
+    client = await compact_client()
+    request = target()
+    await client.tree.get_command("games").callback(request)
+    panel = request.response.send_message.await_args.kwargs["view"]
+    await button(panel, "start").callback(target())
+    assert panel.screen == "start"
+    assert client.provider_manager.provider.calls == []
+
+    client.config = replace(client.config, discord_purchase_mode="enforce", steam_api_key=None)
+    await button(panel, "games").callback(target())
+    steam_entry = next(item for item in panel.children if getattr(item, "action", None) == "steam")
+    assert steam_entry.label == "Saved Steam link"
+    await steam_entry.callback(target())
+    assert "unavailable in the public bot" in panel.embed().description
+    actions = {item.action for item in panel.children if hasattr(item, "action")}
+    assert "steam link" not in actions
+    assert "games together" not in actions
+    assert {"steam status", "steam unlink"} <= actions
+    assert client.provider_manager.provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_player_catalog_search_does_not_claim_shared_profiles_are_missing():
+    from src.customer_controls import CustomerPanel
+
+    client = await compact_client()
+    panel = CustomerPanel(client, target(), "players")
+    assert (
+        panel.embed().description == "No matching titles. Try a shorter game name or another title."
+    )
+
+
 def button(panel, action):
     return next(item for item in panel.children if getattr(item, "action", None) == action)
 

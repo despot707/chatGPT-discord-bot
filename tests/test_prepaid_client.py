@@ -5,7 +5,7 @@ import pytest
 from src.bot import DiscordClient
 from src.config import BotConfig
 from src.prepaid import Denied
-from src.prepaid_client import PLAN_SKUS, active_plan_skus, plan_embed, plan_view
+from src.prepaid_client import PLAN_SKUS, USAGE_FOOTER, active_plan_skus, plan_embed, plan_view
 from src.prepaid_runtime import SCOPE, PaidManager
 
 from tests.test_bot import Manager, interaction
@@ -18,16 +18,30 @@ def test_plan_ui_is_finite_and_has_no_checkout():
     assert any("400 chat attempts" in f["value"] for f in data["fields"])
     assert len(data["fields"]) == 4
     assert "Profiles" in data["fields"][0]["value"]
+    assert "/games" in data["fields"][0]["value"]
     assert "no trial or free ai credits" in data["fields"][0]["value"].lower()
     footer = data["footer"]["text"].lower()
     assert "discord renews automatically unless cancelled" in footer
     assert "verified billing-period renewal refreshes the shared allowance once" in footer
     assert "continue through the current paid period" in footer
     assert "no rollover or usage overages" in footer
+    values = [field["value"].lower() for field in data["fields"]]
+    assert any("casual shared server chat" in value for value in values)
+    assert any("chat plus web and creative tools" in value for value in values)
+    assert any("larger shared allowance" in value for value in values)
     assert "daily availability limits" not in footer
     assert all("server operations" not in f["value"] for f in data["fields"])
     assert sum(len(f["value"]) for f in data["fields"]) < 5000
     assert plan_view(None) is None
+
+
+def test_usage_copy_describes_recurring_subscription_without_overages():
+    footer = USAGE_FOOTER.lower()
+    assert "no usage overages" in footer
+    assert "discord subscriptions renew unless cancelled" in footer
+    assert "cancelling stops the next renewal" in footer
+    assert "access continues through the paid period" in footer
+    assert "no automatic charges" not in footer
 
 
 def test_native_checkout_requires_all_live_gates_and_exact_sku_map(monkeypatch):

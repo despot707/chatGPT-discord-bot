@@ -58,6 +58,11 @@ PLAN_SKUS = {
     "plus": 1554920641088593990,
     "premium": 1554920977488551936,
 }
+USAGE_FOOTER = (
+    "No usage overages. Discord subscriptions renew unless cancelled. Cancelling stops the next "
+    "renewal; access continues through the paid period. Failed provider attempts can consume allowance. "
+    "Privacy controls remain available after expiry."
+)
 
 
 def active_plan_skus(config) -> dict[int, str] | None:
@@ -114,23 +119,31 @@ def plan_embed(*, checkout_available: bool = False) -> discord.Embed:
     )
     e.add_field(
         name="Free for every server",
-        value="Profiles and code-based game, party, and team tools. No trial or free AI credits.",
+        value="Start free with /games. Profiles, parties, and teams are available at no cost. No trial or free AI credits.",
         inline=False,
     )
     for p in PRODUCTS.values():
         if p.kind != "subscription":
             continue
+        benefit = {
+            "Basic": "Casual shared server chat",
+            "Plus": "Chat plus web and creative tools",
+            "Premium": "A larger shared allowance for active communities",
+        }[p.name]
         e.add_field(
             name=f"{p.name} · ${p.price_cents // 100}.{p.price_cents % 100:02d}/month",
             value="\n".join(
-                f"{count:,} {label}"
-                for key, label in [
-                    ("chat", "chat attempts"),
-                    ("reasoning", "more-effort attempts"),
-                    ("search", "web searches"),
-                    ("images", "image generations"),
+                [benefit, ""]
+                + [
+                    f"{count:,} {label}"
+                    for key, label in [
+                        ("chat", "chat attempts"),
+                        ("reasoning", "more-effort attempts"),
+                        ("search", "web searches"),
+                        ("images", "image generations"),
+                    ]
+                    if (count := p.allowances.get(key, 0))
                 ]
-                if (count := p.allowances.get(key, 0))
             ),
             inline=False,
         )
@@ -418,9 +431,7 @@ class PrepaidClientMixin(_PaidBase):
                     value=f"{summary['storage_used']:,} / {summary['storage_limit']:,} bytes",
                     inline=False,
                 )
-                e.set_footer(
-                    text="No automatic charges. Failed provider attempts can consume allowance. Privacy controls remain available after expiry."
-                )
+                e.set_footer(text=USAGE_FOOTER)
                 await interaction.followup.send(
                     embed=e, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
                 )

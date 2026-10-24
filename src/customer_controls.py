@@ -90,6 +90,7 @@ ACTIONS = {
     "status": Action("Technical status"),
     "reset_shared": Action("Clear shared chat"),
     "usage": Action("Plan & usage"),
+    "plans": Action("View AI plans"),
     "birthdays": Action("Shared birthdays"),
     "steam link": Action("Link Steam", (Field("profile", "Steam profile URL or SteamID64"),)),
     "steam unlink": Action("Unlink Steam"),
@@ -122,7 +123,7 @@ ACTIONS = {
     "findplayers": Action("Find players", (Field("query", "Game name", maximum=100),)),
     "profile": Action("Your profile"),
 }
-SCREENS = {"settings", "tools", "styles", "games", "party", "steam", "operator"}
+SCREENS = {"settings", "tools", "styles", "games", "party", "steam", "operator", "start"}
 
 
 class _PanelResponse:
@@ -150,8 +151,14 @@ class _PanelInteraction:
 
 
 class _Button(ui.Button):
-    def __init__(self, panel, label, action, *, value=None, row=0):
-        super().__init__(label=label, row=row, style=discord.ButtonStyle.secondary)
+    def __init__(self, panel, label, action, *, value=None, row=0, style=None):
+        if style is None:
+            style = (
+                discord.ButtonStyle.primary
+                if action in {"start", "party join", "findplayers", "profile"}
+                else discord.ButtonStyle.secondary
+            )
+        super().__init__(label=label, row=row, style=style)
         self.panel, self.action, self.value = panel, action, value
         self.revision = panel.revision
 
@@ -227,6 +234,7 @@ class CustomerPanel(ui.View):
         self.client, self.scope = client, client._scope(interaction)
         self.owner_id = interaction.user.id
         self.screen = screen
+        self.start_origin = screen if screen in ("settings", "games") else "settings"
         self.operator = self.owner_id in client.config.bot_admin_ids
         self.server_manager = client.is_admin(self.owner_id, interaction)
         self.expires_at = time.monotonic() + SESSION_SECONDS
@@ -246,6 +254,7 @@ class CustomerPanel(ui.View):
         pairs = []
         if self.screen == "settings":
             pairs = [
+                ("Get started", "start", None),
                 (f"More effort: {'On' if s.more_effort else 'Off'}", "effort", not s.more_effort),
                 (f"Images: {'On' if s.images_enabled else 'Off'}", "images", not s.images_enabled),
                 ("Chat style", "styles", None),
@@ -274,9 +283,16 @@ class CustomerPanel(ui.View):
             pairs = [("Back", "settings", None)]
         elif self.screen == "games":
             pairs = [
+                ("Get started", "start", None),
                 ("Party & teams", "party", None),
                 ("Find players", "findplayers", None),
-                ("Steam", "steam", None),
+                (
+                    "Saved Steam link"
+                    if self.client.config.discord_purchase_mode == "enforce"
+                    else "Steam",
+                    "steam",
+                    None,
+                ),
                 ("Shared birthdays", "birthdays", None),
                 ("Your profile", "profile", None),
             ]
@@ -298,6 +314,19 @@ class CustomerPanel(ui.View):
         elif self.screen == "operator":
             pairs = [(ACTIONS[a].label, a, None) for a in ("budget", "status")]
             pairs.append(("Back", "settings", None))
+        elif self.screen == "start":
+            pairs = [
+                ("Set up your profile", "profile", None),
+                ("Join a party", "party", None),
+                ("Find players", "findplayers", None),
+                ("Plan & usage", "usage", None),
+                ("View AI plans", "plans", None),
+                (
+                    "Back to games" if self.start_origin == "games" else "Back to settings",
+                    self.start_origin,
+                    None,
+                ),
+            ]
         elif self.screen.startswith("confirm:"):
             action = self.screen.removeprefix("confirm:")
             pairs = [
@@ -335,18 +364,30 @@ class CustomerPanel(ui.View):
             "steam": "Steam",
             "operator": "Server controls",
             "players": "Find players",
+            "start": "Get started · game night",
         }
         descriptions = {
             "settings": "Free controls. @mention me or reply to my message for AI help; those requests use your plan’s allowances. Replies are public in the channel.\nTry ‘think harder’, ‘search the web’, or ‘make an image’.",
             "tools": "Free settings and saved-chat controls. Clear private chat removes your older private conversation here.",
             "styles": "Choose how your replies sound.",
-            "games": "Free game, party and team tools. Saved games and sharing are in /profile.",
+            "games": "Free game, party and team tools. Save and choose sharing for games in /profile.",
             "party": "Party and team results are posted in this channel.",
-            "steam": "Steam ownership isn’t verified. Linking shares your library for party matching.",
+            "steam": (
+                "Steam library imports are unavailable in the public bot. You can inspect or unlink a previously saved connection."
+                if self.client.config.discord_purchase_mode == "enforce"
+                else "Steam ownership isn’t verified. Linking shares your library for party matching."
+            ),
             "operator": "Private diagnostics for configured bot operators only.",
             "players": "Choose a matching title. Only members who shared that game appear."
             if self.results
-            else "No matching games. Try a shorter game name.",
+            else "No matching titles. Try a shorter game name or another title.",
+            "start": (
+                "**1 · Share a game** — Open Your profile, add a catalog title, then choose **This server** to let members find you. New games start private.\n"
+                "**2 · Gather your party** — Join a party and add your skill and role; members can view the channel’s party.\n"
+                "**3 · Find players** — Search a title. Results include only members who shared that game with this server.\n"
+                "**4 · Make teams** — Use Make teams to split the current party, with optional skill balancing.\n\n"
+                "These game-night tools are free. AI requests use the server plan’s feature allowances; check /plans or Plan & usage in /settings."
+            ),
         }
         if self.screen.startswith("confirm:"):
             action = self.screen.removeprefix("confirm:")
@@ -404,6 +445,8 @@ class CustomerPanel(ui.View):
         return await self.client.customer_action_allowed(interaction, root)
 
     async def refresh(self, interaction, screen):
+        if screen == "start":
+            self.start_origin = self.screen if self.screen in ("settings", "games") else "settings"
         self.screen = screen
         self.revision += 1
         self.operator = self.owner_id in self.client.config.bot_admin_ids
@@ -600,7 +643,7 @@ def configure_customer_commands(client):
         await open_panel(client, interaction, "settings")
 
     @app_commands.command(
-        name="games", description="Find players and open free party, team and Steam tools"
+        name="games", description="Find players and open free party, team and saved-link tools"
     )
     @app_commands.guild_only()
     @app_commands.describe(game="Optional: select a game to find players who shared it")
